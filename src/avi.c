@@ -369,7 +369,7 @@ int avi_close(AviWriter *a, char *err, size_t errsz)
     }
 
     end = ftell(a->f);
-    if (rc == 0 && (end < 0 || end - 8 > 0xFFFFFFFFu)) {
+    if (rc == 0 && (end < 0 || (uint64_t)(end - 8) > 0xFFFFFFFFu)) {
         rc = -1;
     } else if (rc == 0 &&
                (patch_u32(a, a->riff_size_pos, (uint32_t)(end - 8)) ||

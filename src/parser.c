@@ -814,7 +814,7 @@ int mgfx_compile_file(const char *path, Program *out, char *err, size_t errsz)
     long sz;
     char *src = NULL;
     Parser *p;
-    int rc = -1;
+    volatile int rc = -1;
 
     program_init(out);
 

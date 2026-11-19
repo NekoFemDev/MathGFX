@@ -5,9 +5,11 @@ LDLIBS  ?= -lm -pthread -lx264
 
 BUILD   := build
 ifeq ($(OS),Windows_NT)
-EXE     := .exe
+EXE        := .exe
+VULKAN_LIB := -lvulkan-1
 else
-EXE     :=
+EXE        :=
+VULKAN_LIB := -lvulkan
 endif
 BIN     := $(BUILD)/mathgfx$(EXE)
 VK_BIN  := $(BUILD)/mathgfx-vk$(EXE)
@@ -44,7 +46,7 @@ $(BUILD)/vk_shader.o: src/vk_shader.c $(HDRS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(VK_BIN): $(VK_OBJ) $(BUILD)/png.o $(BUILD)/avi.o $(BUILD)/mp4.o $(BUILD)/video.o $(BUILD)/portable.o $(BUILD)/stb_write_impl.o
-	$(CC) $(CFLAGS) -o $@ $^ -lvulkan $(LDLIBS)
+	$(CC) $(CFLAGS) -o $@ $^ $(VULKAN_LIB) $(LDLIBS)
 
 test: $(BIN)
 	sh tests/run.sh
