@@ -1,0 +1,302 @@
+; cat.mgf — stylized cat portrait, built from ellipses, triangles and
+; capsules (SDF-style masks) with analytic edge coverage. No textures.
+
+canvas 1280, 720
+
+y_loop
+  x_loop
+    ; isotropic coordinates: x in [-0.888..0.888], y in [-0.5..0.5]
+    mov r10, (U - 0.5) * (W / H)
+    mov r11, V - 0.5
+    mov r9, 1.5 / H              ; ~1.5 px in world units (AA width)
+    mov r13, abs(r10)            ; |x| for symmetric features
+    mov r12, -r13                ; -|x| mirrors the left ear onto the right
+
+    ; ---------------- background: deep teal, soft glow, vignette --------
+    mov r0, 0.018 + 0.030 * V
+    mov r1, 0.050 + 0.070 * V
+    mov r2, 0.090 + 0.090 * V
+
+    mov r3, sqrt(r10 * r10 + (r11 - 0.03) * (r11 - 0.03))
+    mov r3, clamp(1.0 - r3 / 0.90, 0.0, 1.0)
+    mov r3, r3 * r3
+    add r0, 0.050 * r3
+    add r1, 0.085 * r3
+    add r2, 0.060 * r3
+
+    mov r3, fbm2(r10 * 5.0 + 9.0, r11 * 5.0 + 4.0, 3)
+    add r0, (r3 - 0.5) * 0.020
+    add r1, (r3 - 0.5) * 0.025
+    add r2, (r3 - 0.5) * 0.025
+
+    mov r3, clamp(1.0 - (r10 * r10 + r11 * r11) * 0.55, 0.0, 1.0)
+    mov r4, 0.55 + 0.45 * r3
+    mul r0, r4
+    mul r1, r4
+    mul r2, r4
+
+    ; ---------------- body (behind the head) ---------------------------
+    mov r3, (r10 / 0.31) * (r10 / 0.31) + ((r11 - 0.42) / 0.27) * ((r11 - 0.42) / 0.27)
+    mov r3, sqrt(r3)
+    mov r4, clamp(0.5 + (1.0 - r3) * 0.27 / r9, 0.0, 1.0)
+    mov r0, lerp(r0, 0.09, r4)
+    mov r1, lerp(r1, 0.04, r4)
+    mov r2, lerp(r2, 0.025, r4)
+
+    mov r3, (r10 / 0.30) * (r10 / 0.30) + ((r11 - 0.42) / 0.26) * ((r11 - 0.42) / 0.26)
+    mov r3, sqrt(r3)
+    mov r4, clamp(0.5 + (1.0 - r3) * 0.26 / r9, 0.0, 1.0)
+    mov r5, fbm2(r10 * 8.0 + 1.0, r11 * 8.0 + 5.0, 3)
+    mov r6, 0.78 + 0.26 * r5
+    mov r0, lerp(r0, 0.80 * r6, r4)
+    mov r1, lerp(r1, 0.37 * r6, r4)
+    mov r2, lerp(r2, 0.12 * r6, r4)
+
+    ; chest patch
+    mov r3, (r10 / 0.14) * (r10 / 0.14) + ((r11 - 0.37) / 0.13) * ((r11 - 0.37) / 0.13)
+    mov r3, sqrt(r3)
+    mov r4, clamp(0.5 + (1.0 - r3) * 0.13 / r9, 0.0, 1.0)
+    mov r0, lerp(r0, 0.93, r4)
+    mov r1, lerp(r1, 0.76, r4)
+    mov r2, lerp(r2, 0.56, r4)
+
+    ; soft shadow under the chin on the chest
+    mov r3, (r10 / 0.17) * (r10 / 0.17) + ((r11 - 0.305) / 0.075) * ((r11 - 0.305) / 0.075)
+    mov r3, sqrt(r3)
+    mov r4, clamp(0.5 + (1.0 - r3) * 0.075 / r9, 0.0, 1.0)
+    mul r4, 0.30
+    mov r0, lerp(r0, 0.52, r4)
+    mov r1, lerp(r1, 0.27, r4)
+    mov r2, lerp(r2, 0.11, r4)
+
+    ; ---------------- ear silhouettes (dark rim) -----------------------
+    ; left ear triangle A(-0.235,-0.05) B(-0.02,-0.11) C(-0.17,-0.36),
+    ; evaluated at -|x| so the same code draws the mirrored right ear.
+    mov r3, 0.215 * (r11 + 0.05) + 0.060 * (r12 + 0.235)
+    mov r4, -0.150 * (r11 + 0.11) + 0.250 * (r12 + 0.02)
+    mov r5, -0.065 * (r11 + 0.36) - 0.310 * (r12 + 0.17)
+    mov r3, max(r3, r4)
+    mov r3, max(r3, r5)
+    mov r3, clamp(0.5 - r3 / (0.34 * r9), 0.0, 1.0)
+    mov r0, lerp(r0, 0.09, r3)
+    mov r1, lerp(r1, 0.04, r3)
+    mov r2, lerp(r2, 0.025, r3)
+
+    ; ---------------- head silhouette (dark rim) -----------------------
+    mov r3, (r10 / 0.220) * (r10 / 0.220) + ((r11 - 0.055) / 0.200) * ((r11 - 0.055) / 0.200)
+    mov r3, sqrt(r3)
+    mov r4, clamp(0.5 + (1.0 - r3) * 0.200 / r9, 0.0, 1.0)
+    mov r0, lerp(r0, 0.09, r4)
+    mov r1, lerp(r1, 0.04, r4)
+    mov r2, lerp(r2, 0.025, r4)
+
+    ; ---------------- fur: head ----------------------------------------
+    mov r3, (r10 / 0.212) * (r10 / 0.212) + ((r11 - 0.055) / 0.192) * ((r11 - 0.055) / 0.192)
+    mov r3, sqrt(r3)
+    mov r4, clamp(0.5 + (1.0 - r3) * 0.192 / r9, 0.0, 1.0)
+
+    mov r5, fbm2(r10 * 7.0 + 2.0, r11 * 7.0 - 1.0, 4)
+    mov r6, 0.82 + 0.24 * r5
+    mov r14, r6                     ; keep fur modulation for the ears
+
+    mov r7, sqrt((r10 + 0.07) * (r10 + 0.07) + (r11 + 0.06) * (r11 + 0.06))
+    mov r7, clamp(1.0 - r7 / 0.32, 0.0, 1.0)
+    mov r7, r7 * r7
+    mov r8, 0.90 + 0.30 * r7
+
+    mov r0, lerp(r0, 0.92 * r6 * r8, r4)
+    mov r1, lerp(r1, 0.46 * r6 * r8, r4)
+    mov r2, lerp(r2, 0.16 * r6 * r8, r4)
+
+    ; subtle warmer bottom of the face
+    mov r5, clamp((r11 - 0.02) * 2.0, 0.0, 1.0)
+    mov r0, lerp(r0, 0.98, r4 * r5 * 0.18)
+    mov r1, lerp(r1, 0.62, r4 * r5 * 0.18)
+    mov r2, lerp(r2, 0.30, r4 * r5 * 0.18)
+
+    ; ---------------- tabby stripes (clipped by the head mask r4) ------
+    ; centre stripe
+    mov r5, (r10 / 0.018) * (r10 / 0.018) + ((r11 + 0.080) / 0.052) * ((r11 + 0.080) / 0.052)
+    mov r5, sqrt(r5)
+    mov r5, clamp(0.5 + (1.0 - r5) * 0.018 / r9, 0.0, 1.0)
+    mul r5, r4
+    mul r5, 0.55
+    mov r0, lerp(r0, 0.58, r5)
+    mov r1, lerp(r1, 0.22, r5)
+    mov r2, lerp(r2, 0.06, r5)
+
+    ; inner side stripe pair: capsule (0.060,-0.125) -> (0.095,-0.015)
+    mov r5, (r13 - 0.060) * 0.035 + (r11 + 0.125) * 0.110
+    mov r6, 0.035 * 0.035 + 0.110 * 0.110
+    mov r5, r5 / r6
+    mov r5, clamp(r5, 0.0, 1.0)
+    mov r7, r13 - 0.060 - r5 * 0.035
+    mov r8, r11 + 0.125 - r5 * 0.110
+    mov r5, sqrt(r7 * r7 + r8 * r8) - 0.010
+    mov r5, clamp(0.5 - r5 / r9, 0.0, 1.0)
+    mul r5, r4
+    mul r5, 0.45
+    mov r0, lerp(r0, 0.58, r5)
+    mov r1, lerp(r1, 0.22, r5)
+    mov r2, lerp(r2, 0.06, r5)
+
+    ; outer side stripe pair: capsule (0.115,-0.105) -> (0.140,-0.005)
+    mov r5, (r13 - 0.115) * 0.025 + (r11 + 0.105) * 0.100
+    mov r6, 0.025 * 0.025 + 0.100 * 0.100
+    mov r5, r5 / r6
+    mov r5, clamp(r5, 0.0, 1.0)
+    mov r7, r13 - 0.115 - r5 * 0.025
+    mov r8, r11 + 0.105 - r5 * 0.100
+    mov r5, sqrt(r7 * r7 + r8 * r8) - 0.009
+    mov r5, clamp(0.5 - r5 / r9, 0.0, 1.0)
+    mul r5, r4
+    mul r5, 0.40
+    mov r0, lerp(r0, 0.58, r5)
+    mov r1, lerp(r1, 0.22, r5)
+    mov r2, lerp(r2, 0.06, r5)
+
+    ; ---------------- fur: ears (inner triangles) ----------------------
+    mov r3, 0.202 * (r11 + 0.057) + 0.057 * (r12 + 0.229)
+    mov r4, -0.142 * (r11 + 0.114) + 0.238 * (r12 + 0.027)
+    mov r5, -0.060 * (r11 + 0.352) - 0.295 * (r12 + 0.169)
+    mov r3, max(r3, r4)
+    mov r3, max(r3, r5)
+    mov r3, clamp(0.5 - r3 / (0.33 * r9), 0.0, 1.0)
+    mov r0, lerp(r0, 0.90 * r14, r3)
+    mov r1, lerp(r1, 0.44 * r14, r3)
+    mov r2, lerp(r2, 0.15 * r14, r3)
+
+    ; ---------------- inner ears (pink) --------------------------------
+    mov r3, ((r13 - 0.160) / 0.034) * ((r13 - 0.160) / 0.034) + ((r11 + 0.205) / 0.055) * ((r11 + 0.205) / 0.055)
+    mov r3, sqrt(r3)
+    mov r4, clamp(0.5 + (1.0 - r3) * 0.034 / r9, 0.0, 1.0)
+    mov r5, clamp(1.0 - ((r13 - 0.160) * (r13 - 0.160) + (r11 + 0.205) * (r11 + 0.205)) / 0.006, 0.0, 1.0)
+    mul r4, r5
+    mov r0, lerp(r0, 0.95, r4)
+    mov r1, lerp(r1, 0.44, r4)
+    mov r2, lerp(r2, 0.50, r4)
+
+    ; ---------------- muzzle -------------------------------------------
+    mov r3, (r10 / 0.110) * (r10 / 0.110) + ((r11 - 0.170) / 0.076) * ((r11 - 0.170) / 0.076)
+    mov r3, sqrt(r3)
+    mov r4, clamp(0.5 + (1.0 - r3) * 0.076 / r9, 0.0, 1.0)
+    mov r0, lerp(r0, 0.98, r4)
+    mov r1, lerp(r1, 0.86, r4)
+    mov r2, lerp(r2, 0.68, r4)
+
+    ; ---------------- eye sockets --------------------------------------
+    mov r3, ((r13 - 0.088) / 0.062) * ((r13 - 0.088) / 0.062) + ((r11 - 0.020) / 0.052) * ((r11 - 0.020) / 0.052)
+    mov r3, sqrt(r3)
+    mov r4, clamp(0.5 + (1.0 - r3) * 0.052 / r9, 0.0, 1.0)
+    mov r0, lerp(r0, 0.10, r4)
+    mov r1, lerp(r1, 0.045, r4)
+    mov r2, lerp(r2, 0.030, r4)
+
+    ; ---------------- irises -------------------------------------------
+    mov r3, ((r13 - 0.088) / 0.048) * ((r13 - 0.088) / 0.048) + ((r11 - 0.020) / 0.043) * ((r11 - 0.020) / 0.043)
+    mov r3, sqrt(r3)
+    mov r4, clamp(0.5 + (1.0 - r3) * 0.043 / r9, 0.0, 1.0)
+    ; vertical iris gradient: darker at the top, brighter below
+    mov r5, clamp(0.5 + (r11 - 0.02) * 8.0, 0.0, 1.0)
+    mov r6, 0.20 + 0.12 * r5
+    mov r7, 0.62 + 0.30 * r5
+    mov r8, 0.22 + 0.16 * r5
+    mov r0, lerp(r0, r6, r4)
+    mov r1, lerp(r1, r7, r4)
+    mov r2, lerp(r2, r8, r4)
+
+    ; ---------------- pupils (vertical slits) --------------------------
+    mov r3, ((r13 - 0.088) / 0.012) * ((r13 - 0.088) / 0.012) + ((r11 - 0.020) / 0.031) * ((r11 - 0.020) / 0.031)
+    mov r3, sqrt(r3)
+    mov r4, clamp(0.5 + (1.0 - r3) * 0.012 / r9, 0.0, 1.0)
+    mov r0, lerp(r0, 0.02, r4)
+    mov r1, lerp(r1, 0.02, r4)
+    mov r2, lerp(r2, 0.02, r4)
+
+    ; ---------------- eye highlights -----------------------------------
+    mov r3, sqrt((r13 - 0.073) * (r13 - 0.073) + (r11 - 0.004) * (r11 - 0.004))
+    mov r4, clamp(0.5 + (0.011 - r3) / r9, 0.0, 1.0)
+    mov r0, lerp(r0, 1.0, r4)
+    mov r1, lerp(r1, 1.0, r4)
+    mov r2, lerp(r2, 0.95, r4)
+
+    ; ---------------- nose (small triangle) ----------------------------
+    mov r3, 0.056 * (r11 - 0.130)
+    mov r4, -0.028 * (r11 - 0.130) - 0.042 * (r10 - 0.028)
+    mov r5, -0.028 * (r11 - 0.172) + 0.042 * r10
+    mov r3, min(r3, r4)
+    mov r3, min(r3, r5)
+    mov r3, clamp(0.5 + r3 / (0.05 * r9), 0.0, 1.0)
+    mov r0, lerp(r0, 0.95, r3)
+    mov r1, lerp(r1, 0.42, r3)
+    mov r2, lerp(r2, 0.48, r3)
+
+    ; ---------------- mouth: centre line -------------------------------
+    ; capsule from (0,0.170) to (0,0.198), radius 0.0035
+    mov r3, (r11 - 0.170) / 0.028
+    mov r3, clamp(r3, 0.0, 1.0)
+    mov r5, r10
+    mov r6, r11 - 0.170 - r3 * 0.028
+    mov r5, sqrt(r5 * r5 + r6 * r6) - 0.0035
+    mov r5, clamp(0.5 - r5 / r9, 0.0, 1.0)
+    mov r0, lerp(r0, 0.18, r5)
+    mov r1, lerp(r1, 0.08, r5)
+    mov r2, lerp(r2, 0.055, r5)
+
+    ; ---------------- mouth: side curves -------------------------------
+    ; capsule from (0,0.198) to (0.050,0.212), drawn with |x| on both sides
+    mov r3, (r13 - 0.0) * 0.050 + (r11 - 0.198) * 0.014
+    mov r4, 0.050 * 0.050 + 0.014 * 0.014
+    mov r3, r3 / r4
+    mov r3, clamp(r3, 0.0, 1.0)
+    mov r5, r13 - 0.0 - r3 * 0.050
+    mov r6, r11 - 0.198 - r3 * 0.014
+    mov r5, sqrt(r5 * r5 + r6 * r6) - 0.0035
+    mov r5, clamp(0.5 - r5 / r9, 0.0, 1.0)
+    mov r0, lerp(r0, 0.18, r5)
+    mov r1, lerp(r1, 0.08, r5)
+    mov r2, lerp(r2, 0.055, r5)
+
+    ; ---------------- whiskers -----------------------------------------
+    ; beam 1: (0.060,0.188) -> (0.400,0.120)
+    mov r3, (r13 - 0.060) * 0.340 + (r11 - 0.188) * (-0.068)
+    mov r4, 0.340 * 0.340 + 0.068 * 0.068
+    mov r3, r3 / r4
+    mov r3, clamp(r3, 0.0, 1.0)
+    mov r5, r13 - 0.060 - r3 * 0.340
+    mov r6, r11 - 0.188 - r3 * (-0.068)
+    mov r5, sqrt(r5 * r5 + r6 * r6) - 0.0032
+    mov r5, clamp(0.5 - r5 / r9, 0.0, 1.0)
+    mov r0, lerp(r0, 0.99, r5)
+    mov r1, lerp(r1, 0.93, r5)
+    mov r2, lerp(r2, 0.80, r5)
+
+    ; beam 2: (0.060,0.190) -> (0.430,0.190)
+    mov r3, (r13 - 0.060) * 0.370 + (r11 - 0.190) * 0.0
+    mov r4, 0.370 * 0.370
+    mov r3, r3 / r4
+    mov r3, clamp(r3, 0.0, 1.0)
+    mov r5, r13 - 0.060 - r3 * 0.370
+    mov r6, r11 - 0.190 - r3 * 0.0
+    mov r5, sqrt(r5 * r5 + r6 * r6) - 0.0032
+    mov r5, clamp(0.5 - r5 / r9, 0.0, 1.0)
+    mov r0, lerp(r0, 0.99, r5)
+    mov r1, lerp(r1, 0.93, r5)
+    mov r2, lerp(r2, 0.80, r5)
+
+    ; beam 3: (0.060,0.192) -> (0.400,0.260)
+    mov r3, (r13 - 0.060) * 0.340 + (r11 - 0.192) * 0.068
+    mov r4, 0.340 * 0.340 + 0.068 * 0.068
+    mov r3, r3 / r4
+    mov r3, clamp(r3, 0.0, 1.0)
+    mov r5, r13 - 0.060 - r3 * 0.340
+    mov r6, r11 - 0.192 - r3 * 0.068
+    mov r5, sqrt(r5 * r5 + r6 * r6) - 0.0032
+    mov r5, clamp(0.5 - r5 / r9, 0.0, 1.0)
+    mov r0, lerp(r0, 0.99, r5)
+    mov r1, lerp(r1, 0.93, r5)
+    mov r2, lerp(r2, 0.80, r5)
+
+    set_pixel X, Y, r0, r1, r2
+  end
+end

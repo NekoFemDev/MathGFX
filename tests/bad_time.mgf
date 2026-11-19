@@ -1,0 +1,6 @@
+; Deliberately invalid: a time_loop step of zero.
+canvas 8, 8
+
+time_loop 0.0, 1.0, 0.0
+  save_frame "out/test/never.png"
+end

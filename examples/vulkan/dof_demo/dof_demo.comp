@@ -1,0 +1,342 @@
+#version 450
+
+// dof_demo.comp — a deliberately photogenic DoF test.
+//
+// A sharp foreground sphere on a neon grid floor, a receding row of
+// glossy spheres, and a field of small emissive orbs that turn into
+// bokeh when they leave the focal plane. Thin-lens camera: every sample
+// starts somewhere on the aperture disk and aims at the focus plane.
+// No depth buffer, no post blur.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(std430, binding = 0) buffer OutBuf {
+    uint pixels[];
+};
+
+layout(push_constant) uniform Params {
+    uint width;
+    uint height;
+    float time;
+    uint frame;
+    float aperture;
+    float focus;
+    uint samples;
+    uint seed;
+} pc;
+
+const int NSPH = 6;
+const vec4 SPH[NSPH] = vec4[NSPH](
+    vec4(-1.15, 0.62, -1.2, 0.62),   // focus subject
+    vec4( 0.75, 0.55,  1.1, 0.55),
+    vec4(-0.55, 0.45,  3.0, 0.45),
+    vec4( 1.55, 0.70,  4.6, 0.70),
+    vec4(-1.35, 0.40,  6.8, 0.40),
+    vec4( 0.20, 0.90,  9.0, 0.90)
+);
+const vec3 SCOL[NSPH] = vec3[NSPH](
+    vec3(1.00, 0.42, 0.12),   // amber
+    vec3(0.18, 0.80, 0.95),   // cyan
+    vec3(0.95, 0.20, 0.52),   // magenta
+    vec3(0.95, 0.72, 0.25),   // gold
+    vec3(0.28, 0.48, 1.00),   // blue
+    vec3(0.55, 0.95, 0.45)    // green
+);
+
+const int NORB = 12;
+const vec4 ORB[NORB] = vec4[NORB](
+    vec4(-2.8, 1.4,  6.0, 0.10),
+    vec4(-2.0, 2.2,  8.0, 0.12),
+    vec4(-0.8, 1.3,  9.5, 0.11),
+    vec4( 0.3, 2.6,  7.0, 0.13),
+    vec4( 1.3, 1.8,  9.0, 0.10),
+    vec4( 2.2, 2.7, 11.0, 0.12),
+    vec4( 2.9, 1.3, 13.0, 0.10),
+    vec4(-2.4, 3.0, 14.0, 0.14),
+    vec4( 0.9, 3.1, 16.0, 0.12),
+    vec4( 0.0, 1.7, 18.0, 0.11),
+    vec4( 2.4, 3.2, 21.0, 0.13),
+    vec4(-1.5, 2.6, 24.0, 0.12)
+);
+const vec3 OCOL[NORB] = vec3[NORB](
+    vec3(1.00, 0.55, 0.18), vec3(0.20, 0.75, 1.00),
+    vec3(1.00, 0.25, 0.55), vec3(1.00, 0.85, 0.35),
+    vec3(0.40, 0.55, 1.00), vec3(0.45, 1.00, 0.55),
+    vec3(1.00, 0.60, 0.25), vec3(0.85, 0.30, 1.00),
+    vec3(0.25, 0.90, 0.95), vec3(1.00, 0.45, 0.30),
+    vec3(0.55, 0.70, 1.00), vec3(1.00, 0.90, 0.55)
+);
+
+uint hash2(int x, int y)
+{
+    uint h = uint(x) * 0x27d4eb2du ^ uint(y) * 0x165667b1u;
+    h ^= h >> 15u;
+    h *= 0x85ebca6bu;
+    h ^= h >> 13u;
+    h *= 0xc2b2ae35u;
+    h ^= h >> 16u;
+    return h;
+}
+
+float hash2f(int x, int y)
+{
+    return float(hash2(x, y)) / 4294967296.0;
+}
+
+float fade5(float t)
+{
+    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+}
+
+float noise2(float x, float y)
+{
+    float fx = floor(x);
+    float fy = floor(y);
+    int ix = int(fx);
+    int iy = int(fy);
+    float u = fade5(x - fx);
+    float v = fade5(y - fy);
+    float a = hash2f(ix, iy);
+    float b = hash2f(ix + 1, iy);
+    float c = hash2f(ix, iy + 1);
+    float d = hash2f(ix + 1, iy + 1);
+    float ab = mix(a, b, u);
+    float cd = mix(c, d, u);
+    return mix(ab, cd, v);
+}
+
+float fbm2(float x, float y, int oct)
+{
+    float sum = 0.0;
+    float amp = 1.0;
+    float norm = 0.0;
+    float fx = x;
+    float fy = y;
+    if (oct < 1)
+        oct = 1;
+    if (oct > 10)
+        oct = 10;
+    for (int i = 0; i < oct; i++) {
+        sum += amp * noise2(fx, fy);
+        norm += amp;
+        amp *= 0.5;
+        fx *= 2.0;
+        fy *= 2.0;
+    }
+    return norm > 0.0 ? sum / norm : 0.0;
+}
+
+float hit_sphere(vec3 ro, vec3 rd, vec4 s)
+{
+    vec3 oc = ro - s.xyz;
+    float b = dot(oc, rd);
+    float c = dot(oc, oc) - s.w * s.w;
+    float h = b * b - c;
+    if (h < 0.0)
+        return -1.0;
+    h = sqrt(h);
+    float t = -b - h;
+    if (t < 0.0)
+        t = -b + h;
+    return t > 0.0 ? t : -1.0;
+}
+
+vec3 shade_sphere(vec3 p, vec3 rd, vec3 center, vec3 base, float time)
+{
+    vec3 n = normalize(p - center);
+    vec3 light = normalize(vec3(-0.55, 0.85, -0.35));
+    float diff = max(dot(n, light), 0.0);
+    float spec = pow(max(dot(normalize(light - rd), n), 0.0), 72.0);
+    float rim = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
+
+    float pat = fbm2(n.x * 2.6 + n.z * 1.7 + time * 0.05,
+                     n.y * 2.6 - n.z * 1.1, 4);
+    vec3 col = base * (0.22 + 0.78 * diff) * (0.70 + 0.55 * pat);
+    col += vec3(1.0, 0.90, 0.78) * spec * 1.8;
+    col += base * rim * 0.65;
+
+    vec3 refl = reflect(rd, n);
+    vec3 env = mix(vec3(0.015, 0.03, 0.06),
+                   vec3(0.16, 0.24, 0.40),
+                   clamp(refl.y * 0.5 + 0.5, 0.0, 1.0));
+    col = mix(col, env, 0.20);
+    return col;
+}
+
+vec3 background(vec3 rd)
+{
+    float g = clamp(rd.y * 0.6 + 0.35, 0.0, 1.0);
+    vec3 col = mix(vec3(0.006, 0.010, 0.022),
+                   vec3(0.025, 0.045, 0.085), g);
+    float neb = fbm2(rd.x * 4.0 + 5.0, rd.y * 4.0 - 2.0, 4);
+    col += vec3(0.025, 0.012, 0.035) * neb * neb;
+    float s = noise2(rd.x * 120.0 + 3.0, rd.y * 120.0 - 7.0);
+    s = clamp((s - 0.991) * 110.0, 0.0, 1.0);
+    s *= s;
+    col += vec3(s) * 0.9;
+    return col;
+}
+
+vec3 sphere_center(int i, float time)
+{
+    vec3 p = SPH[i].xyz;
+    if (i == 0) {
+        p.x += 0.16 * sin(time * 0.9);
+        p.z += 0.04 * sin(time * 0.6);
+    } else {
+        p.x += 0.35 * sin(time * 0.45 + float(i) * 1.7);
+        p.z += 0.45 * sin(time * 0.32 + float(i) * 0.9);
+    }
+    return p;
+}
+
+float hit_objects(vec3 ro, vec3 rd, float time, out int kind, out int idx)
+{
+    float best = 1e30;
+    kind = -1;
+    idx = -1;
+    for (int i = 0; i < NSPH; i++) {
+        vec4 s = vec4(sphere_center(i, time), SPH[i].w);
+        float t = hit_sphere(ro, rd, s);
+        if (t > 0.0 && t < best) {
+            best = t;
+            kind = 0;
+            idx = i;
+        }
+    }
+    for (int i = 0; i < NORB; i++) {
+        vec4 o = ORB[i];
+        o.x += 0.18 * sin(time * 0.35 + float(i) * 1.3);
+        o.y += 0.10 * sin(time * 0.80 + float(i) * 1.7);
+        o.z += 0.22 * cos(time * 0.28 + float(i) * 0.9);
+        float t = hit_sphere(ro, rd, o);
+        if (t > 0.0 && t < best) {
+            best = t;
+            kind = 100;
+            idx = i;
+        }
+    }
+    return kind < 0 ? -1.0 : best;
+}
+
+vec3 render_ray(vec3 ro, vec3 rd, float time)
+{
+    int kind, idx;
+    float best = hit_objects(ro, rd, time, kind, idx);
+    float tf = rd.y < -1e-4 ? -ro.y / rd.y : -1.0;
+    if (tf > 0.0 && (best < 0.0 || tf < best)) {
+        best = tf;
+        kind = 1; /* floor */
+    }
+    if (kind < 0)
+        return background(rd);
+
+    vec3 p = ro + rd * best;
+
+    if (kind == 0) {
+        vec3 c = sphere_center(idx, time);
+        return shade_sphere(p, rd, c, SCOL[idx], time);
+    }
+    if (kind == 100) {
+        vec3 c = OCOL[idx];
+        float pulse = 0.85 + 0.15 * sin(time * 2.0 + float(idx));
+        return c * 2.2 * pulse;
+    }
+
+    /* floor: dark glossy grid + soft contact shadows */
+    vec2 q = abs(fract(p.xz * 0.5) - 0.5);
+    float line = 1.0 - smoothstep(0.0, 0.035, min(q.x, q.y));
+    float glow = 1.0 - smoothstep(0.0, 0.16, min(q.x, q.y));
+    float checker = mod(floor(p.x * 0.5) + floor(p.z * 0.5), 2.0);
+    vec3 base = mix(vec3(0.012, 0.018, 0.030),
+                    vec3(0.032, 0.048, 0.070), checker);
+    base += line * vec3(0.08, 0.38, 0.46) + glow * vec3(0.010, 0.040, 0.050);
+
+    float shadow = 1.0;
+    for (int i = 0; i < NSPH; i++) {
+        vec3 sc = sphere_center(i, time);
+        vec2 d = (p.xz - sc.xz) / (SPH[i].w * 1.6 + 0.15);
+        float d2 = dot(d, d);
+        shadow *= mix(0.35, 1.0, smoothstep(0.0, 1.0, d2));
+    }
+    base *= shadow;
+
+    vec3 refl = reflect(rd, vec3(0.0, 1.0, 0.0));
+    vec3 env = mix(vec3(0.01, 0.02, 0.04),
+                   vec3(0.10, 0.16, 0.26),
+                   clamp(refl.y * 0.5 + 0.5, 0.0, 1.0));
+    int rk, ri;
+    float rt = hit_objects(p, refl, time, rk, ri);
+    if (rt > 0.0) {
+        vec3 rp = p + refl * rt;
+        if (rk == 0) {
+            vec3 rc = sphere_center(ri, time);
+            env = shade_sphere(rp, refl, rc, SCOL[ri], time);
+        }
+        else
+            env = OCOL[ri] * 2.2;
+    }
+    float fres = pow(1.0 - max(dot(vec3(0.0, 1.0, 0.0), -rd), 0.0), 5.0);
+    vec3 col = mix(base, env, 0.22 + 0.55 * fres);
+    col += vec3(0.6, 0.28, 0.08)
+         * pow(max(dot(refl, normalize(vec3(-0.5, 0.8, -0.3))), 0.0), 36.0)
+         * 0.55;
+    return col;
+}
+
+void main()
+{
+    uvec2 gid = gl_GlobalInvocationID.xy;
+    if (gid.x >= pc.width || gid.y >= pc.height)
+        return;
+
+    vec2 uv = (vec2(gid) + 0.5) / vec2(float(pc.width), float(pc.height));
+    float aspect = float(pc.width) / float(pc.height);
+    float sx = (uv.x - 0.5) * 2.0 * aspect;
+    float sy = (0.5 - uv.y) * 2.0;
+
+    vec3 cam = vec3(0.0, 1.30, -6.0);
+    vec3 fwd = normalize(vec3(0.0, -0.12, 1.0));
+    vec3 right = vec3(1.0, 0.0, 0.0);
+    vec3 up = normalize(cross(fwd, right));
+    float tan_half = 0.32492;
+    float focus = pc.focus > 0.0 ? pc.focus : 5.0;
+
+    vec3 target = cam + fwd * focus
+                + right * (sx * focus * tan_half)
+                + up * (sy * focus * tan_half);
+
+    uint n = pc.samples < 1u ? 1u : pc.samples;
+    float invn = 1.0 / float(n);
+    float seed = hash2f(int(gid.x), int(gid.y));
+    vec3 acc = vec3(0.0);
+
+    for (uint s = 0u; s < n; s++) {
+        float u = fract(seed + 0.754877666 * float(s + 1u)
+                        + 0.13 * float(pc.frame));
+        float v = fract(seed * 1.37 + 0.569840291 * float(s + 1u)
+                        + 0.17 * float(pc.frame));
+        float rr = sqrt(u);
+        float th = 6.28318530718 * v;
+        vec2 lens = vec2(rr * cos(th), rr * sin(th));
+
+        vec3 origin = cam + right * (lens.x * pc.aperture)
+                          + up * (lens.y * pc.aperture);
+        vec3 vel = normalize(target - origin);
+        acc += render_ray(origin, vel, pc.time);
+    }
+
+    vec3 color = acc * invn;
+
+    vec2 px = vec2(gid);
+    color.r += (noise2(px.x * 1.7 + 3.0, px.y * 1.7 - 5.0) - 0.5) * 0.004;
+    color.g += (noise2(px.x * 1.9 - 7.0, px.y * 1.9 + 2.0) - 0.5) * 0.004;
+    color.b += (noise2(px.x * 2.1 + 11.0, px.y * 2.1 + 4.0) - 0.5) * 0.004;
+
+    if (any(isnan(color)))
+        color = vec3(0.0);
+
+    uvec3 outc = uvec3(clamp(color, 0.0, 1.0) * 255.0 + 0.5);
+    pixels[gid.y * pc.width + gid.x] =
+        outc.r | (outc.g << 8) | (outc.b << 16) | 0xFF000000u;
+}

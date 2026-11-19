@@ -1,0 +1,39 @@
+; mandelbrot.mgf — per-pixel iteration with repeat / if / break.
+
+canvas 960, 540
+
+y_loop
+  x_loop
+    mov r0, (U - 0.5) * 3.2 - 0.6
+    mov r1, (V - 0.5) * 2.4
+    mov r2, 0.0
+    mov r3, 0.0
+    mov r4, 0.0
+
+    repeat 96
+      mov r5, r2 * r2 - r3 * r3 + r0
+      mov r6, 2.0 * r2 * r3 + r1
+      mov r2, r5
+      mov r3, r6
+      mov r7, r2 * r2 + r3 * r3
+      if r7 > 4.0
+        break
+      end
+      add r4, 1.0
+    end
+
+    ; deep blue (escaped early) -> warm orange (approaching the boundary)
+    mov r5, sqrt(r4 / 96.0)
+    mov r7, 0.10 + 0.90 * r5 * r5
+    mov r8, 0.05 + 0.55 * r5 * r5 * r5
+    mov r9, 0.28 + 0.25 * sin(r5 * 3.14159)
+
+    if r4 >= 96.0
+      mov r7, 0.0
+      mov r8, 0.0
+      mov r9, 0.0
+    end
+
+    set_pixel X, Y, r7, r8, r9
+  end
+end

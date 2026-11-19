@@ -1,0 +1,13 @@
+; anim.mgf — save_frame / %0Nd substitution test.
+
+canvas 32, 32
+
+time_loop 0.0, 0.3, 0.1
+  y_loop
+    x_loop
+      mov r0, 0.5 + 0.5 * sin(T * 20.0 + U * 6.28318)
+      set_pixel X, Y, r0, U, V
+    end
+  end
+  save_frame "out/test/frame_%03d.png"
+end

@@ -1,0 +1,8 @@
+build/
+out/
+*.o
+*.png
+!docs/*.png
+dist/
+__pycache__/
+*.pyc

@@ -1,0 +1,297 @@
+; earth.mgf — procedural Earth seen from space (static still).
+;
+; Geometry: unit sphere at (0, 0, 3.3), pinhole camera at the origin with a
+; 0.40 half-FOV in tangent space. The ray/sphere hit is analytic, so the
+; planet silhouette is exact; a screen-independent Fresnel term and an
+; exponential-ish halo give the atmosphere its limb glow.
+;
+; Surface frame: planet north axis is tilted 22 degrees towards the camera
+; (A = (0, cos22, -sin22)), so the Arctic cap is visible at the top.
+; Latitude is dot(N, axis); continents come from a 3-slice 3D-ish fbm
+; sampled in that frame, moisture from a second lower-frequency field.
+; Albedo is assembled from deep ocean, continental shelf, green biomass,
+; subtropical desert belts, tundra, mountain rock and snow.
+;
+; Light: L = (-0.52, 0.30, -0.80) (normalised, sun behind the camera), a soft terminator, a warm
+; sunset band, Blinn-Phong sun glint on water, an ice cap around the
+; north pole, city lights on the night side and a procedural star field.
+;
+; Clouds are a separate domain-warped fbm field on the same sphere; in
+; earth_clouds.mgf that field rotates around the planet's axis.
+;
+; CPU cost is dominated by the fbm sampling (roughly 26 noise octaves per
+; pixel). 960x540 on 8 threads is a few seconds; see README.
+
+canvas 1280, 720
+
+y_loop
+  x_loop
+    ; ---------------- primary ray ---------------------------------------
+    ; sx in [-0.711..0.711], sy in [-0.4..0.4] for 16:9
+    mov r3, (U - 0.5) * 2.0 * (W / H) * 0.40
+    mov r4, (0.5 - V) * 0.80
+    mov r10, 1.0 / sqrt(r3 * r3 + r4 * r4 + 1.0)
+    mov r3, r3 * r10
+    mov r4, r4 * r10
+    mov r5, r10
+
+    ; ---------------- ray / unit sphere intersection ---------------------
+    ; C = (0,0,3.3): b = C.z * dz, disc = b^2 - (|C|^2 - 1)
+    mov r6, 3.3 * r5
+    mov r11, r6 * r6 - 9.89
+
+    if r11 < 0.0
+      ; ================= space + atmosphere halo =========================
+      ; faint blue-black sky with a soft galactic band
+      mov r0, 0.0015
+      mov r1, 0.0030
+      mov r2, 0.0090
+      mov r10, fbm2(r3 * 2.2 + 3.0, r4 * 2.2 - 4.0, 3)
+      add r0, 0.010 * r10
+      add r1, 0.013 * r10
+      add r2, 0.022 * r10
+
+      ; two sizes of stars; thresholded value noise makes sub-pixel points
+      mov r10, noise2(r3 * 700.0 + 11.0, r4 * 700.0 - 23.0)
+      mov r10, clamp((r10 - 0.9955) * 900.0, 0.0, 1.0)
+      mov r10, r10 * r10
+      add r0, r10
+      add r1, r10
+      add r2, r10 * 1.05
+
+      mov r14, noise2(r3 * 420.0 - 37.0, r5 * 420.0 + 9.0)
+      mov r14, clamp((r14 - 0.9940) * 600.0, 0.0, 1.0)
+      mov r14, r14 * r14 * 0.75
+      add r0, r14
+      add r1, r14 * 0.94
+      add r2, r14 * 0.86
+
+      ; closest approach of the ray to the planet centre, then the
+      ; outward normal of the nearest point on the limb for sun-facing
+      mov r11, sqrt(1.0 - r11)                     ; b > 1
+      mov r12, (r6 * r3 * (-0.52) + r6 * r4 * 0.30 + (r6 * r5 - 3.3) * (-0.80)) / r11
+      mov r13, clamp(1.0 - abs(r12) * 4.5, 0.0, 1.0)   ; sunset weight
+      mov r12, clamp(0.15 + 0.85 * (0.5 + 0.5 * r12), 0.0, 1.0)
+
+      mov r15, clamp((r11 - 1.0) * 5.556, 0.0, 1.0)  ; 0..1 over 0.18 R
+      mov r15, 1.0 - r15
+      mov r10, 0.26 * pow(r15, 2.2) + 0.14 * pow(r15, 8.0)
+      mul r10, r12
+
+      add r0, r10 * (0.30 + 0.25 * r13)
+      add r1, r10 * (0.52 + 0.02 * r13)
+      add r2, r10 * (0.95 - 0.25 * r13)
+
+      ; thin bright limb ring just outside the silhouette
+      mov r15, clamp(1.0 - abs(r11 - 1.004) * 150.0, 0.0, 1.0)
+      mov r15, r15 * r15 * r12 * 0.38
+      add r0, r15 * 0.55
+      add r1, r15 * 0.75
+      add r2, r15
+
+    else
+      ; ================= surface hit =====================================
+      mov r12, r6 - sqrt(r11)                      ; t
+      mov r7, r12 * r3                             ; Nx
+      mov r8, r12 * r4                             ; Ny
+      mov r9, r12 * r5 - 3.3                       ; Nz
+
+      ; ---------------- planet frame -----------------------------------
+      ; axis = (0, cos22, -sin22) = (0, 0.9272, -0.3746)
+      mov r10, 0.9272 * r8 - 0.3746 * r9           ; qy = sin(latitude)
+      mov r11, r7                                  ; qx
+      mov r12, (-0.3746) * r8 - 0.9272 * r9        ; qz
+      ; spin 0.7 rad around the axis, to put a continent group on the
+      ; visible hemisphere: cos = 0.76484, sin = 0.64422
+      mov r13, r11 * 0.76484 + r12 * 0.64422
+      mov r12, r12 * 0.76484 - r11 * 0.64422
+      mov r11, r13                                 ; qx rotated
+      ; r11 = qx, r10 = qy, r12 = qz
+
+      ; ---------------- continents --------------------------------------
+      ; three orthogonal-ish fbm slices -> a continuous field on the sphere
+      mov r13, (fbm2(r11 * 2.1 + 10.0, r10 * 2.1 - 3.0, 4) + fbm2(r10 * 2.1 + 21.0, r12 * 2.1 + 8.0, 4) + fbm2(r12 * 2.1 - 7.0, r11 * 2.1 + 31.0, 4)) / 3.0
+      ; ragged coastline detail
+      mov r13, r13 + 0.070 * (fbm2(r11 * 14.0 + 4.0, r10 * 14.0 - 6.0, 3) - 0.5)
+
+      ; land mask with a soft 0.03-wide shoreline
+      mov r15, smoothstep(0.0, 1.0, (r13 - 0.497) * 33.0)
+
+      ; ---------------- moisture ----------------------------------------
+      ; broad, high-contrast field: drives deserts vs. rainforest
+      mov r14, (fbm2(r11 * 2.8 + 5.0, r10 * 2.8 - 2.0, 3) + fbm2(r10 * 2.8 + 9.0, r12 * 2.8 + 3.0, 3)) * 0.5
+      mov r14, smoothstep(0.0, 1.0, (r14 - 0.40) * 3.5)
+
+      ; ---------------- land albedo -------------------------------------
+      ; muted greens -> olive savanna -> sand, driven by moisture
+      mov r0, 0.115 + 0.105 * r14
+      mov r1, 0.185 + 0.120 * r14
+      mov r2, 0.070 + 0.050 * r14
+
+      ; subtropical desert belts (15..40 deg, dry only)
+      mov r6, clamp(1.12 - 1.35 * r14, 0.0, 1.0)
+      mul r6, smoothstep(0.0, 1.0, (abs(r10) - 0.10) * 7.0)
+      mul r6, 1.0 - smoothstep(0.0, 1.0, (abs(r10) - 0.50) * 8.0)
+      mov r0, lerp(r0, 0.620, 0.95 * r6)
+      mov r1, lerp(r1, 0.505, 0.95 * r6)
+      mov r2, lerp(r2, 0.325, 0.95 * r6)
+
+      ; cold tundra / boreal transition
+      mov r6, smoothstep(0.0, 1.0, (abs(r10) - 0.60) * 4.6)
+      mov r0, lerp(r0, 0.275, 0.80 * r6)
+      mov r1, lerp(r1, 0.285, 0.80 * r6)
+      mov r2, lerp(r2, 0.235, 0.80 * r6)
+
+      ; broad biome hue: dark forest -> olive savanna -> scrub
+      mov r6, fbm2(r11 * 5.2 - 3.0, r10 * 5.2 + 11.0, 3)
+      mov r0, lerp(r0, 0.225, 0.52 * r6)
+      mov r1, lerp(r1, 0.190, 0.52 * r6)
+      mov r2, lerp(r2, 0.095, 0.52 * r6)
+
+      ; vegetation / terrain micro texture: three slices keep it isotropic
+      mov r6, (fbm2(r11 * 16.0 + 8.0, r10 * 16.0 - 2.0, 2) + fbm2(r10 * 16.0 - 4.0, r12 * 16.0 + 7.0, 2) + fbm2(r12 * 16.0 + 1.0, r11 * 16.0 - 9.0, 2)) / 3.0
+      mov r6, 0.70 + 0.60 * r6
+      mul r0, r6
+      mul r1, r6
+      mul r2, r6
+
+      ; exposed rock on high ground
+      mov r14, smoothstep(0.0, 1.0, (r13 - 0.565) * 10.0)
+      mov r0, lerp(r0, 0.375, 0.55 * r14)
+      mov r1, lerp(r1, 0.345, 0.55 * r14)
+      mov r2, lerp(r2, 0.300, 0.55 * r14)
+
+      ; snow line: high latitudes plus high ground
+      mov r6, smoothstep(0.0, 1.0, (abs(r10) - 0.800) * 8.5)
+      mov r6, max(r6, smoothstep(0.0, 1.0, (r13 - 0.660) * 14.0) * 0.8)
+      mov r0, lerp(r0, 0.855, r6)
+      mov r1, lerp(r1, 0.880, r6)
+      mov r2, lerp(r2, 0.915, r6)
+
+      ; ---------------- ocean albedo ------------------------------------
+      ; deep water with slow current / depth variation, turquoise shelf
+      ; near the coast, then composite land over water
+      mov r14, fbm2(r11 * 5.0 + 7.0, r10 * 5.0 - 9.0, 3)
+      mov r0, lerp(0.006 + 0.026 * r14 + 0.026 * smoothstep(0.0, 1.0, (r13 - 0.470) * 36.0), r0, r15)
+      mov r1, lerp(0.034 + 0.055 * r14 + 0.105 * smoothstep(0.0, 1.0, (r13 - 0.470) * 36.0), r1, r15)
+      mov r2, lerp(0.100 + 0.085 * r14 + 0.065 * smoothstep(0.0, 1.0, (r13 - 0.470) * 36.0), r2, r15)
+
+      ; ---------------- polar ice cap -----------------------------------
+      ; around the north pole (tilted towards the camera); noise breaks
+      ; the circle into a ragged, non-uniform sheet
+      mov r6, abs(r10) + 0.045 * (noise2(r11 * 8.0 + 1.0, r12 * 8.0 - 3.0) - 0.5) + 0.018 * (noise2(r11 * 27.0 - 4.0, r12 * 27.0 + 9.0) - 0.5)
+      mov r6, smoothstep(0.0, 1.0, (r6 - 0.930) * 14.0)
+      mov r14, 0.76 + 0.22 * fbm2(r11 * 19.0 + 5.0, r12 * 19.0 - 8.0, 3)
+      mov r0, lerp(r0, 0.74 * r14, 0.95 * r6)
+      mov r1, lerp(r1, 0.81 * r14, 0.95 * r6)
+      mov r2, lerp(r2, 0.90 * r14, 0.95 * r6)
+
+      ; ---------------- lighting ----------------------------------------
+      ; N.L and a soft terminator (day = 0 at N.L=-0.08, 1 at 0.17)
+      mov r14, r7 * (-0.52) + r8 * 0.30 + r9 * (-0.80)
+      mov r15, smoothstep(0.0, 1.0, (r14 + 0.08) * 4.0)
+      mov r6, 0.020 + 1.05 * r15
+      mul r0, r6
+      mul r1, r6
+      mul r2, r6
+
+      ; ---------------- sun glint on water ------------------------------
+      ; Blinn-Phong, H = normalize(L + V), V = -ray
+      mov r6, 1.0 / sqrt((-r3 - 0.52) * (-r3 - 0.52) + (-r4 + 0.30) * (-r4 + 0.30) + (-r5 - 0.80) * (-r5 - 0.80))
+      mov r6, pow(clamp((r7 * (-r3 - 0.52) + r8 * (-r4 + 0.30) + r9 * (-r5 - 0.80)) * r6, 0.0, 1.0), 80.0)
+      mul r6, 1.0 - r15                            ; only the lit hemisphere
+      mul r6, 1.0 - smoothstep(0.0, 1.0, (r13 - 0.480) * 25.0)  ; only water
+      mul r6, 2.4
+      add r0, r6
+      add r1, r6
+      add r2, r6 * 0.96
+
+      ; ---------------- city lights on the night side -------------------
+      mov r6, 1.0 - smoothstep(0.0, 1.0, (r14 + 0.10) * 5.0)
+      mov r14, fbm2(r11 * 70.0 + 2.0, r12 * 70.0 - 5.0, 2)
+      mov r14, smoothstep(0.0, 1.0, (r14 - 0.630) * 13.0)
+      mul r14, r6
+      mul r14, smoothstep(0.0, 1.0, (r13 - 0.500) * 30.0)       ; land
+      mul r14, 1.0 - smoothstep(0.0, 1.0, (abs(r10) - 0.86) * 14.0)
+      ; prefer coasts, where cities actually cluster
+      mul r14, 0.30 + 0.70 * (1.0 - smoothstep(0.0, 1.0, (r13 - 0.500) * 8.0))
+      mul r14, 0.85
+      add r0, r14
+      add r1, r14 * 0.62
+      add r2, r14 * 0.27
+
+      ; ---------------- clouds ------------------------------------------
+      ; two scales: large frontal systems plus small cumulus fields.
+      ; Longitude is compressed (x0.65) so systems elongate east-west like
+      ; real cloud streets; the domain warp adds cyclonic swirls.
+      mov r14, fbm2((r11 * 0.65) * 1.2 + 2.0, r10 * 1.8 - 5.0, 2) + fbm2((r12 * 0.65) * 1.2 - 1.0, r10 * 1.8 + 8.0, 2) - 1.0
+      mov r6, 0.40 * fbm2(((r11 * 0.80) + 0.30 * r14) * 4.0 + 3.0, (r10 + 0.30 * r14) * 4.0 + 1.0, 5)
+      add r6, 0.34 * fbm2(((r12 * 0.80) + 0.30 * r14) * 4.0 - 2.0, (r10 - 0.30 * r14) * 4.0 + 6.0, 5)
+      add r6, 0.26 * fbm2(((r11 * 0.65) - 0.30 * r14) * 7.5 + 9.0, (r10 + 0.30 * r14) * 7.5 - 4.0, 4)
+
+      ; latitude bands: wet ITCZ, clear subtropics, mid-latitude storms;
+      ; a low-frequency phase jitter keeps the belts from looking ruled
+      mov r13, 0.62 + 0.30 * cos(r10 * 6.0 + 1.2 * (noise2(r11 * 2.0 + 3.0, r12 * 2.0 - 7.0) - 0.5))
+      add r13, 0.45 * (fbm2(r11 * 1.4 + 20.0, r10 * 1.4 - 6.0, 2) - 0.5)
+      mov r6, smoothstep(0.0, 1.0, (r6 - (0.578 - 0.095 * r13)) * 5.6)
+
+      ; fractal erosion: thin edges break into wisps
+      mov r14, fbm2(((r11 * 0.65) + 0.31) * 15.0 + 5.0, (r10 - 0.17) * 15.0 - 3.0, 3)
+      mov r6, smoothstep(0.0, 1.0, (r6 + 0.38 * (r14 - 0.5)) * 1.05)
+      mul r6, 0.84 + 0.16 * smoothstep(0.0, 1.0, (r14 - 0.26) * 2.8)
+
+      ; high-frequency cumulus field, partially transparent
+      mov r13, 0.5 * fbm2(((r11 * 0.65) + 0.15) * 10.5 + 12.0, (r10 - 0.15) * 10.5 - 4.0, 3)
+      add r13, 0.5 * fbm2(((r12 * 0.65) + 0.15) * 10.5 - 6.0, (r10 + 0.15) * 10.5 + 2.0, 3)
+      mov r13, smoothstep(0.0, 1.0, (r13 - 0.590) * 5.2)
+      mul r13, 0.70
+      mov r6, r6 + (1.0 - r6) * r13
+
+      ; directional side-shading: a coarse field sampled on the lit and
+      ; shadow flanks of each system. Gives the sheets a 3-D volume feel.
+      mov r13, fbm2((r11 * 0.65 + 0.08) * 8.0 + 31.0, (r10 + 0.03) * 8.0 - 7.0, 3)
+      mov r14, fbm2((r11 * 0.65 - 0.08) * 8.0 + 31.0, (r10 - 0.03) * 8.0 - 7.0, 3)
+      sub r13, r14
+      mov r13, clamp(0.82 + 7.0 * r13, 0.48, 1.12)
+      mul r13, 0.78 + 0.22 * r6
+
+      ; cloud colour: white in daylight, near black at night, warm at
+      ; the terminator. thick cores are brighter than thin edges.
+      mov r14, 4.0 * r15 * (1.0 - r15)
+      mov r10, 0.96 * (0.05 + 1.05 * r15) * r13 + 0.04 * (1.0 - r6)
+      mov r11, 0.98 * (0.05 + 1.05 * r15) * r13 + 0.06 * (1.0 - r6)
+      mov r12, 1.00 * (0.05 + 1.05 * r15) * r13 + 0.09 * (1.0 - r6)
+      mov r0, lerp(r0, r10 + 0.28 * r14, r6)
+      mov r1, lerp(r1, r11 + 0.11 * r14, r6)
+      mov r2, lerp(r2, r12 + 0.02 * r14, r6)
+
+      ; ---------------- atmospheric rim on the disc ---------------------
+      ; f = 1-N.V grows towards the silhouette. Two terms: a broad blue
+      ; haze and a narrow white-blue band right at the limb.
+      mov r6, clamp(1.0 + r7 * r3 + r8 * r4 + r9 * r5, 0.0, 1.0)
+      mov r14, pow(r6, 2.0) * 0.22 * (0.30 + 0.70 * r15)
+      add r0, r14 * 0.18
+      add r1, r14 * 0.40
+      add r2, r14 * 0.85
+      mov r14, pow(r6, 9.0) * 0.34 * (0.20 + 0.80 * r15)
+      add r0, r14 * 0.55
+      add r1, r14 * 0.72
+      add r2, r14 * 1.00
+    end
+
+    ; ---------------- tone curve + dither ------------------------------
+    ; the renderer writes display-domain values straight to RGB8; a mild
+    ; gamma lifts the midtones the way a camera curve would
+    mov r0, pow(clamp(r0, 0.0, 1.0), 0.82)
+    mov r1, pow(clamp(r1, 0.0, 1.0), 0.82)
+    mov r2, pow(clamp(r2, 0.0, 1.0), 0.82)
+
+    mov r6, noise2(X * 1.7 + 3.0, Y * 1.7 - 5.0) - 0.5
+    mul r6, 0.006
+    add r0, r6
+    add r1, r6
+    add r2, r6
+
+    set_pixel X, Y, r0, r1, r2
+  end
+end

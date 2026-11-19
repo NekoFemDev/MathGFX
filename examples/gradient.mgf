@@ -1,0 +1,13 @@
+; gradient.mgf — the smallest complete scene.
+; X, Y are pixel coordinates; U, V are in [0,1]; T is time.
+
+canvas 1280, 720
+
+y_loop
+  x_loop
+    mov r0, U
+    mov r1, V
+    mov r2, 0.5 + 0.5 * sin(U * 6.28318 + T)
+    set_pixel X, Y, r0, r1, r2
+  end
+end

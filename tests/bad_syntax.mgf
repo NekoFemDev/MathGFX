@@ -1,0 +1,8 @@
+; Deliberately unbalanced: the outer y_loop is never closed.
+canvas 8, 8
+
+y_loop
+  x_loop
+    mov r0, 1.0
+    set_pixel X, Y, r0, r0, r0
+  end

@@ -1,0 +1,271 @@
+#version 450
+
+// MathGFX Vulkan compute black hole.
+// Same camera/disk model as examples/blackhole.mgf, float32.
+// Optional honest depth of field: thin-lens aperture sampling, no
+// screen-space blur. Output: one packed RGB word per invocation.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(std430, binding = 0) buffer OutBuf {
+    uint pixels[];
+};
+
+layout(push_constant) uniform Params {
+    uint width;
+    uint height;
+    float time;
+    uint frame;
+    float aperture;
+    float focus;
+    uint samples;
+    uint seed;
+} pc;
+
+const float PI_F = 3.141592653589793;
+
+uint hash2(int x, int y)
+{
+    uint h = uint(x) * 0x27d4eb2du ^ uint(y) * 0x165667b1u;
+    h ^= h >> 15u;
+    h *= 0x85ebca6bu;
+    h ^= h >> 13u;
+    h *= 0xc2b2ae35u;
+    h ^= h >> 16u;
+    return h;
+}
+
+float hash2f(int x, int y)
+{
+    return float(hash2(x, y)) / 4294967296.0;
+}
+
+float fade5(float t)
+{
+    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+}
+
+float noise2(float x, float y)
+{
+    float fx = floor(x);
+    float fy = floor(y);
+    int ix = int(fx);
+    int iy = int(fy);
+    float u = fade5(x - fx);
+    float v = fade5(y - fy);
+    float a = hash2f(ix, iy);
+    float b = hash2f(ix + 1, iy);
+    float c = hash2f(ix, iy + 1);
+    float d = hash2f(ix + 1, iy + 1);
+    float ab = mix(a, b, u);
+    float cd = mix(c, d, u);
+    return mix(ab, cd, v);
+}
+
+float fbm2(float x, float y, int oct)
+{
+    float sum = 0.0;
+    float amp = 1.0;
+    float norm = 0.0;
+    float fx = x;
+    float fy = y;
+    if (oct < 1)
+        oct = 1;
+    if (oct > 10)
+        oct = 10;
+    for (int i = 0; i < oct; i++) {
+        sum += amp * noise2(fx, fy);
+        norm += amp;
+        amp *= 0.5;
+        fx *= 2.0;
+        fy *= 2.0;
+    }
+    return norm > 0.0 ? sum / norm : 0.0;
+}
+
+vec3 disk_color(float x, float y, float r, float t)
+{
+    float u = (r - 3.0) / 9.0;
+    float hot = clamp(1.0 - u, 0.0, 1.0);
+    hot *= hot;
+    vec3 col = vec3(1.0, 0.30 + 0.66 * hot, 0.05 + 0.83 * hot);
+
+    // differential rotation: the noise pattern is advected with a
+    // Keplerian-like angular speed ~ r^-1.5
+    float omega = 1.5 / (r * sqrt(r));
+    float ang = -t * omega;
+    float ca = cos(ang);
+    float sa = sin(ang);
+    vec2 q = vec2(ca * x - sa * y, sa * x + ca * y);
+
+    float n1 = fbm2(q.x * 1.3 + 4.0, q.y * 1.3 - 2.0, 5);
+    float turb = 0.75 + 0.40 * n1;
+    float n2 = fbm2(q.x * 3.5 - 1.0, q.y * 3.5 + 3.0, 3);
+    turb *= 0.90 + 0.20 * n2;
+
+    float phi = atan(q.y, q.x);
+    float sw = sin(phi * 12.0 - r * 0.8 + turb * 3.0);
+    turb *= 0.85 + 0.22 * sw;
+
+    float bright = pow(3.0 / r, 1.2) * 2.6;
+    float glow = clamp(1.0 - (r - 3.0) / 0.9, 0.0, 1.0);
+    glow *= glow;
+    bright += 1.10 * glow;
+    float fade = clamp((12.0 - r) / 2.5, 0.0, 1.0);
+    bright *= fade;
+
+    float vlos = -0.9781 * x / r;
+    float beta = sqrt(0.5 / r);
+    float D = 1.0 / (1.0 - beta * vlos);
+    float grav = sqrt(1.0 - 1.0 / r);
+    float shift = D * grav;
+    bright *= shift * shift * shift;
+
+    float blue = clamp((shift - 1.0) * 1.5, 0.0, 1.0) * 0.35;
+    col = mix(col, vec3(1.0, 0.88, 1.0), blue);
+    return col * bright * turb;
+}
+
+vec3 background(vec3 d)
+{
+    float n1 = fbm2(d.x * 5.0 + 7.0, d.y * 5.0 - 3.0, 4);
+    float n2 = fbm2(d.x * 11.0 - 2.0, d.z * 11.0 + 5.0, 3);
+    vec3 col = vec3(0.004 + 0.020 * n1 + 0.008 * n2,
+                    0.007 + 0.028 * n1 + 0.012 * n2,
+                    0.018 + 0.055 * n1 + 0.025 * n2);
+
+    float s1 = noise2(d.x * 90.0 + 13.0, d.y * 90.0 - 7.0);
+    s1 = clamp((s1 - 0.985) * 80.0, 0.0, 1.0);
+    s1 *= s1;
+    col += vec3(s1, s1, s1 * 1.05);
+
+    float s2 = noise2(d.x * 170.0 - 4.0, d.z * 170.0 + 9.0);
+    s2 = clamp((s2 - 0.992) * 120.0, 0.0, 1.0);
+    col += vec3(s2 * 0.8, s2 * 0.8, s2 * 0.9);
+    return col;
+}
+
+// One primary ray: Schwarzschild geodesic + first disk crossing / capture
+// / escape, including the smooth photon-ring term.
+vec3 trace(vec3 pos, vec3 vel, float t)
+{
+    vec3 prev = pos;
+    vec3 c = cross(pos, vel);
+    float h2 = dot(c, c);
+    vec3 color = vec3(0.0);
+    int flag = 0; /* -1 disk, -2 captured, -3 escaped, 0 unresolved */
+
+    for (int i = 0; i < 360; i++) {
+        float r2 = dot(pos, pos);
+        float r = sqrt(r2);
+        float dt = 0.025 * r + 0.010;
+
+        vec3 acc = -1.5 * h2 * pos / (r2 * r2 * r);
+        vel += 0.5 * dt * acc;
+        pos += dt * vel;
+
+        r2 = dot(pos, pos);
+        r = sqrt(r2);
+
+        if (prev.z * pos.z < 0.0) {
+            float tt = prev.z / (prev.z - pos.z);
+            vec3 hit = mix(prev, pos, tt);
+            float rc = length(hit.xy);
+            if (rc > 3.0 && rc < 12.0) {
+                color = disk_color(hit.x, hit.y, rc, t);
+                flag = -1;
+                break;
+            }
+        }
+
+        if (r < 1.0) {
+            color = vec3(0.0);
+            flag = -2;
+            break;
+        }
+
+        if (r > 40.0 && dot(pos, vel) > 0.0) {
+            flag = -3;
+            break;
+        }
+
+        acc = -1.5 * h2 * pos / (r2 * r2 * r);
+        vel += 0.5 * dt * acc;
+        prev = pos;
+    }
+
+    if (flag == -3)
+        color = background(normalize(vel));
+    else if (flag == -1)
+        ; /* disk colour already computed */
+    else
+        color = vec3(0.0);
+
+    if (flag != -1) {
+        float b = sqrt(h2);
+        float ring = clamp(1.0 - abs(b - 2.598) / 0.075, 0.0, 1.0);
+        ring *= ring;
+        color += vec3(0.55, 0.40, 0.26) * ring;
+    }
+    return color;
+}
+
+void main()
+{
+    uvec2 gid = gl_GlobalInvocationID.xy;
+    if (gid.x >= pc.width || gid.y >= pc.height)
+        return;
+
+    vec2 uv = (vec2(gid) + 0.5) / vec2(float(pc.width), float(pc.height));
+    float aspect = float(pc.width) / float(pc.height);
+    float sx = (uv.x - 0.5) * 2.0 * aspect;
+    float sy = (0.5 - uv.y) * 2.0;
+
+    // camera: r = 24 rs, inclination 12 degrees, half-FOV 18 degrees
+    vec3 cam = vec3(0.0, -23.474, 4.990);
+    vec3 fwd = vec3(0.0, 0.9781, -0.2079);
+    vec3 right = vec3(1.0, 0.0, 0.0);
+    vec3 up = vec3(0.0, 0.2079, 0.9781);
+    float tan_half = 0.32492;
+    float focus = pc.focus > 0.0 ? pc.focus : 24.0;
+
+    vec3 target = cam + fwd * focus
+                + right * (sx * focus * tan_half)
+                + up * (sy * focus * tan_half);
+
+    uint n = pc.samples < 1u ? 1u : pc.samples;
+    float invn = 1.0 / float(n);
+    float seed = hash2f(int(gid.x), int(gid.y));
+    vec3 acc = vec3(0.0);
+
+    for (uint s = 0u; s < n; s++) {
+        // R2 low-discrepancy disk sample, decorrelated per pixel/frame
+        float u = fract(seed + 0.754877666 * float(s + 1u)
+                        + 0.13 * float(pc.frame));
+        float v = fract(seed * 1.37 + 0.569840291 * float(s + 1u)
+                        + 0.17 * float(pc.frame));
+        float rr = sqrt(u);
+        float th = 6.28318530718 * v;
+        vec2 lens = vec2(rr * cos(th), rr * sin(th));
+
+        vec3 origin = cam + right * (lens.x * pc.aperture)
+                          + up * (lens.y * pc.aperture);
+        vec3 vel = normalize(target - origin);
+        acc += trace(origin, vel, pc.time);
+    }
+
+    vec3 color = acc * invn;
+
+    // 8-bit dither (per output pixel, after averaging)
+    vec2 px = vec2(gid);
+    color.r += (noise2(px.x * 1.7 + 3.0, px.y * 1.7 - 5.0) - 0.5) * 0.004;
+    color.g += (noise2(px.x * 1.9 - 7.0, px.y * 1.9 + 2.0) - 0.5) * 0.004;
+    color.b += (noise2(px.x * 2.1 + 11.0, px.y * 2.1 + 4.0) - 0.5) * 0.004;
+
+    if (any(isnan(color)))
+        color = vec3(0.0);
+
+    uvec3 outc = uvec3(clamp(color, 0.0, 1.0) * 255.0 + 0.5);
+    pixels[gid.y * pc.width + gid.x] =
+        outc.r | (outc.g << 8) | (outc.b << 16) | 0xFF000000u;
+}
