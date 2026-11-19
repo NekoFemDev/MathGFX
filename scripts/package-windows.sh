@@ -23,16 +23,11 @@ done
 
 # Explicit runtime DLLs that ldd does not always resolve on the CI image.
 for dll in vulkan-1.dll libvulkan-1.dll libwinpthread-1.dll \
-           libgcc_s_seh-1.dll libstdc++-6.dll libssp-0.dll; do
+           libgcc_s_seh-1.dll libssp-0.dll; do
     [ -f "/mingw64/bin/$dll" ] && cp "/mingw64/bin/$dll" "dist/$name/"
 done
 
-if command -v pacman >/dev/null 2>&1; then
-    for f in $(pacman -Ql mingw-w64-x86_64-x264 2>/dev/null | awk '{print $2}' | \
-               grep -Ei '/(copying|license)'); do
-        [ -f "$f" ] && cp "$f" "dist/$name/X264_LICENSE"
-    done
-fi
+cp third_party/licenses/X264_LICENSE "dist/$name/X264_LICENSE"
 for f in /mingw64/share/licenses/vulkan-loader/*; do
     [ -f "$f" ] && cp "$f" "dist/$name/VULKAN_LOADER_LICENSE"
 done
