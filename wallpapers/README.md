@@ -43,11 +43,10 @@ Each ~2.8 MB PNG. Pick any for static wallpaper.
 
 | File | Duration | Frames | Size | Description |
 |------|----------|--------|------|-------------|
-| `bh_2k_60fps_10s_loop1.mp4` | 10 s | 600 | 7.7 MB | Full disk rotation (t=0→12.5) |
-| `bh_2k_60fps_10s_loop2.mp4` | 10 s | 600 | 7.8 MB | Phase offset (t=π→π+12.5) |
+| `bh_2k_60fps_10s_final.mp4` | 10 s | 600 | 12.1 MB | **Seamless loop** — rigid rotation, 1 full orbit per 10s, noise-wrapped for perfect looping |
 | `bh_2k_60fps_5s_dof.mp4` | 5 s | 300 | ~5 MB | Cinematic DoF (4 samples, aperture 0.3) |
 
-**Loop seamlessly:** Disk rotation period ≈ 12.5 time units. Videos span exactly one period.
+**Loop seamlessly:** Rigid rotation completes exactly 1 orbit per 10s. Noise seeds wrap modulo frame count for pixel-perfect looping.
 
 ### Preview Thumbnails (540×960)
 

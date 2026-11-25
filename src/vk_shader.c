@@ -35,25 +35,34 @@ static void usage(FILE *f)
         "\n"
         "usage:\n"
         "  mathgfx-vk [--shader build/blackhole.spv] [--width N] [--height N]\n"
-        "             [--ssaa N] [--gpu N] [--time SECONDS]\n"
+        "             [--ssaa N] [--gpu N] [--time SECONDS] [--time-end SECONDS]\n"
         "             [--dof N] [--aperture A] [--focus F]\n"
+        "             [--loop-period SECONDS] [--rigid-rotation]\n"
         "             [--out out/blackhole_vk.png] [--video out.avi]\n"
         "             [--frames N] [--fps N] [--quality N] [--list-gpus]\n"
         "\n"
-        "  --shader P  SPIR-V compute shader (default build/blackhole.spv)\n"
-        "  --ssaa N    render at N*N supersampling then box-downsample (1..4)\n"
-        "  --gpu N     physical device index (see --list-gpus; default: first\n"
-        "              device with a compute queue)\n"
-        "  --time T    time uniform for the shader (default 0)\n"
-        "  --dof N     thin-lens samples per pixel (default 1)\n"
-        "  --aperture A lens radius in rs (default 0 = pinhole)\n"
-        "  --focus F   focus distance in rs (default 24)\n"
-        "  --focus-end F  animate focus from F to this value and back\n"
-        "  --video P   render N frames into an MJPEG AVI instead of a PNG\n"
-        "  --frames N  number of video frames (required with --video)\n"
-        "  --fps N     video frame rate (default 25)\n"
-        "  --quality N JPEG quality 1..100 (default 90)\n"
-        "  --crf N     H.264 CRF 0..51 for .mp4 (default 20)\n");
+        "  --shader P         SPIR-V compute shader (default build/blackhole.spv)\n"
+        "  --ssaa N           render at N*N supersampling then box-downsample (1..4)\n"
+        "  --gpu N            physical device index (see --list-gpus; default: first\n"
+        "                     device with a compute queue)\n"
+        "  --time T           start time uniform for the shader (default 0)\n"
+        "  --time-end T       end time for video (default: time + frames/fps).\n"
+        "                     If set, time interpolates linearly from --time to\n"
+        "                     --time-end over all frames. Use for seamless loops.\n"
+        "  --loop-period T    if > 0, time wraps modulo T in shader (seamless loops\n"
+        "                     with blackhole_loop.spv). Use with --time-end.\n"
+        "  --rigid-rotation   uniform disk rotation (same omega at all radii)\n"
+        "                     instead of Keplerian differential rotation.\n"
+        "                     Requires blackhole_loop.spv.\n"
+        "  --dof N            thin-lens samples per pixel (default 1)\n"
+        "  --aperture A       lens radius in rs (default 0 = pinhole)\n"
+        "  --focus F          focus distance in rs (default 24)\n"
+        "  --focus-end F      animate focus from F to this value and back\n"
+        "  --video P          render N frames into an MJPEG AVI instead of a PNG\n"
+        "  --frames N         number of video frames (required with --video)\n"
+        "  --fps N            video frame rate (default 25)\n"
+        "  --quality N        JPEG quality 1..100 (default 90)\n"
+        "  --crf N            H.264 CRF 0..51 for .mp4 (default 20)\n");
 }
 
 static int parse_int(const char *s, int *out)
@@ -126,6 +135,10 @@ typedef struct {
     float focus;
     uint32_t samples;
     uint32_t seed;
+    float loop_period;    // if > 0, time wraps modulo this
+    uint32_t rigid_rotation; // if 1, uniform rotation instead of Keplerian
+    float duration;       // video duration (time_end - time_start) for Keplerian seamless mode
+    uint32_t total_frames; // total frames in video (for seamless noise wrapping)
 } PushParams;
 
 static void record_dispatch(VkCommandBuffer cmd, VkPipeline pipeline,
@@ -211,10 +224,14 @@ int main(int argc, char **argv)
     int gpu_index = -1;
     int list_gpus = 0;
     float time_val = 0.0f;
+    float time_end = -1.0f;
     float aperture = 0.0f;
     float focus = 24.0f;
     float focus_end = -1.0f;
     int dof_samples = 1;
+    float loop_period = -1.0f;
+    int rigid_rotation = 0;
+    float duration = -1.0f;
     const char *shader_path = "build/blackhole.spv";
     const char *out_path = "out/blackhole_vk.png";
     const char *video_path = NULL;
@@ -263,6 +280,11 @@ int main(int argc, char **argv)
             time_val = strtof(argv[++i], &end);
             if (!end || *end || time_val < 0.0f || time_val > 1.0e6f)
                 goto bad_args;
+        } else if (strcmp(argv[i], "--time-end") == 0 && i + 1 < argc) {
+            char *end = NULL;
+            time_end = strtof(argv[++i], &end);
+            if (!end || *end || time_end < 0.0f || time_end > 1.0e6f)
+                goto bad_args;
         } else if (strcmp(argv[i], "--dof") == 0 && i + 1 < argc) {
             if (parse_int(argv[++i], &dof_samples) != 0 ||
                 dof_samples < 1 || dof_samples > 512)
@@ -282,6 +304,18 @@ int main(int argc, char **argv)
             focus_end = strtof(argv[++i], &end);
             if (!end || *end || focus_end < 0.1f || focus_end > 1000.0f)
                 goto bad_args;
+        } else if (strcmp(argv[i], "--loop-period") == 0 && i + 1 < argc) {
+            char *end = NULL;
+            loop_period = strtof(argv[++i], &end);
+            if (!end || *end || loop_period < 0.0f || loop_period > 1.0e6f)
+                goto bad_args;
+        } else if (strcmp(argv[i], "--duration") == 0 && i + 1 < argc) {
+            char *end = NULL;
+            duration = strtof(argv[++i], &end);
+            if (!end || *end || duration < 0.0f || duration > 1.0e6f)
+                goto bad_args;
+        } else if (strcmp(argv[i], "--rigid-rotation") == 0) {
+            rigid_rotation = 1;
         } else if (strcmp(argv[i], "--list-gpus") == 0) {
             list_gpus = 1;
         } else {
@@ -513,7 +547,7 @@ bad_args:
         memset(&pcr, 0, sizeof(pcr));
         pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pcr.offset = 0;
-        pcr.size = 32;
+        pcr.size = 56;  /* 14 * 4 bytes for PushParams (aligned) */
         memset(&plci, 0, sizeof(plci));
         plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         plci.setLayoutCount = 1;
@@ -599,6 +633,10 @@ bad_args:
         pp.focus = focus;
         pp.samples = (uint32_t)dof_samples;
         pp.seed = 0;
+        pp.loop_period = loop_period;
+        pp.rigid_rotation = rigid_rotation ? 1u : 0u;
+        pp.duration = duration > 0.0f ? duration : (time_end > time_val ? time_end - time_val : 0.0f);
+        pp.total_frames = (uint32_t)frames;
 
         src = (uint32_t *)mapped;
         snap = (uint32_t *)malloc((size_t)rw * (size_t)rh * 4u);
@@ -634,7 +672,12 @@ bad_args:
                 return 1;
             }
             for (f = 0; f < frames; f++) {
-                float t = time_val + (float)f / (float)fps;
+                float t;
+                if (time_end >= 0.0f && frames > 1) {
+                    t = time_val + (time_end - time_val) * (float)f / (float)(frames - 1);
+                } else {
+                    t = time_val + (float)f / (float)fps;
+                }
                 double a, b;
                 a = mgfx_now_sec();
                 pp.time = t;
