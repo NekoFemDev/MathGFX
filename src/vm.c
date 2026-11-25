@@ -88,6 +88,44 @@ static void put_pixel(VM *vm, double dx, double dy, double r, double g, double b
     px[2] = to8(b);
 }
 
+/* Box-filter downsample for SSAA.
+ * src: src_w x src_h RGB8 (src_w = dst_w * ssaa, src_h = dst_h * ssaa)
+ * dst: dst_w x dst_h RGB8
+ * ssaa: supersampling factor (1..4) */
+void mgfx_downsample_box(const unsigned char *src, int src_w, int src_h,
+                         int ssaa, unsigned char *dst)
+{
+    int dst_w = src_w / ssaa;
+    int dst_h = src_h / ssaa;
+    int x, y, sy, sx;
+
+    if (ssaa <= 1) {
+        size_t n = (size_t)src_w * src_h * 3;
+        memcpy(dst, src, n);
+        return;
+    }
+
+    for (y = 0; y < dst_h; y++) {
+        for (x = 0; x < dst_w; x++) {
+            uint64_t r = 0, g = 0, b = 0;
+            uint32_t n = (uint32_t)(ssaa * ssaa);
+            size_t dst_idx = ((size_t)y * dst_w + x) * 3u;
+
+            for (sy = 0; sy < ssaa; sy++) {
+                for (sx = 0; sx < ssaa; sx++) {
+                    size_t src_idx = ((size_t)(y * ssaa + sy) * src_w + (x * ssaa + sx)) * 3u;
+                    r += src[src_idx + 0];
+                    g += src[src_idx + 1];
+                    b += src[src_idx + 2];
+                }
+            }
+            dst[dst_idx + 0] = (unsigned char)((r + n / 2) / n);
+            dst[dst_idx + 1] = (unsigned char)((g + n / 2) / n);
+            dst[dst_idx + 2] = (unsigned char)((b + n / 2) / n);
+        }
+    }
+}
+
 static double var_value(const VM *vm, int id)
 {
     switch (id) {

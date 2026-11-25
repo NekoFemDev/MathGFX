@@ -125,4 +125,11 @@ void mgfx_render_free(RenderResult *r);
 int mgfx_write_png(const char *path, int w, int h, const unsigned char *rgb);
 int mgfx_ensure_parent_dir(const char *path);
 
+/* Downsample RGB8 buffer with box filter (SSAA).
+ * src:  src_w x src_h (src_w = dst_w * ssaa, src_h = dst_h * ssaa)
+ * dst:  dst_w x dst_h
+ * ssaa: supersampling factor (1..4) */
+void mgfx_downsample_box(const unsigned char *src, int src_w, int src_h,
+                         int ssaa, unsigned char *dst);
+
 #endif /* MGFX_H */

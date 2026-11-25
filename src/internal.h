@@ -3,6 +3,31 @@
 
 #include "mgfx.h"
 
+/* ---- arena allocator ---------------------------------------------------- */
+
+typedef struct ArenaChunk ArenaChunk;
+struct ArenaChunk {
+    ArenaChunk *next;
+    size_t used;
+    size_t cap;
+    char data[];
+};
+
+typedef struct {
+    ArenaChunk *head;
+    ArenaChunk *tail;
+    size_t chunk_size;
+} Arena;
+
+void arena_init(Arena *a, size_t chunk_size);
+void arena_free(Arena *a);
+void *arena_alloc(Arena *a, size_t size, size_t align);
+void *arena_alloc_zero(Arena *a, size_t size, size_t align);
+char *arena_strdup(Arena *a, const char *s);
+void arena_reset(Arena *a);
+
+/* ---- lexer / tokens ----------------------------------------------------- */
+
 typedef enum {
     TK_EOF = 0,
     TK_NL,

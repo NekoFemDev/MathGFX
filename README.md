@@ -1,31 +1,31 @@
 # MathGFX
 
-Software procedural renderer: собственный ASM-like DSL → байткод → VM →
-RGB8-кадр → PNG. Основной путь — CPU; тяжёлые сцены можно выносить в
-headless Vulkan compute, по одному шейдеру на эффект. Видео пишется
-встроенным H.264/MP4-путём (libx264 + свой MP4-муксер) или MJPEG/AVI
-fallback — без ffmpeg. Никаких диффузионных моделей — только математика.
+Software procedural renderer: custom ASM-like DSL → bytecode → VM →
+RGB8 frame → PNG. Primary path is CPU; heavy scenes can be offloaded to
+headless Vulkan compute (one shader per effect). Video is written via
+built-in H.264/MP4 (libx264 + custom MP4 muxer) or MJPEG/AVI fallback
+— no ffmpeg required. No diffusion models — just math.
 
-`Project.md` — исходная концепция. Этот README описывает то, что уже
-реализовано в v0.1.
+`Project.md` — original concept. This README describes what is
+implemented in v0.1.
 
 ---
 
-## Быстрый старт
+## Quick Start
 
 ```sh
 make
 ./build/mathgfx render examples/gradient.mgf out/gradient.png
 ```
 
-Шесть сцен сразу:
+Six scenes at once:
 
 ```sh
 make examples
 # out/gradient.png  out/plasma.png  out/mandelbrot.png  out/noise.png  out/cat.png  out/earth.png
 ```
 
-Чёрная дыра отдельно (360 шагов интегрирования геодезик на пиксель):
+Black hole separately (360 geodesic integration steps per pixel):
 
 ```sh
 make blackhole          # out/blackhole_960.png, 960x540, ~40 s
@@ -34,22 +34,22 @@ make blackhole-vk       # Vulkan Mali: 1920x1080 2x SSAA -> out/blackhole_vk.png
 make blackhole-vk-video # Vulkan Mali: 5 s 1920x1080 H.264 MP4 -> out/blackhole_vk.mp4, ~10 s
 ```
 
-Видео из сцены или PNG-секвенции:
+Video from scene or PNG sequence:
 
 ```sh
 ./build/mathgfx video tests/anim.mgf out/anim.mp4 --fps 25 --crf 20
 ./build/mathgfx mux -o out/anim.mp4 --fps 25 --crf 20 out/frame_*.png
-# fallback без x264: .avi + MJPEG
+# fallback without x264: .avi + MJPEG
 ./build/mathgfx video tests/anim.mgf out/anim.avi --fps 25
 ```
 
-Проверка сцен без рендера:
+Scene check without rendering:
 
 ```sh
 ./build/mathgfx check examples/*.mgf
 ```
 
-Тесты:
+Tests:
 
 ```sh
 make test
@@ -57,37 +57,38 @@ make test
 
 ---
 
-## Что уже есть
+## What's Implemented
 
-- Лексер, парсер и однопроходный компилятор DSL в байткод.
-- Регистровая VM: `r0..r15`, `double`, отдельный стек выражений.
-- Выражения с приоритетами, унарный минус, сравнения, `^`.
-- Встроенные переменные `X Y U V T W H PI`.
-- Математика: `sin cos tan sqrt abs floor ceil fract min max pow mod
+- Lexer, parser, and single-pass DSL-to-bytecode compiler.
+- Register VM: `r0..r15`, `double`, separate expression stack.
+- Expressions with precedence, unary minus, comparisons, `^`.
+- Built-in variables `X Y U V T W H PI`.
+- Math: `sin cos tan sqrt abs floor ceil fract min max pow mod
   atan2 clamp lerp smoothstep noise2 fbm2`.
-- Блоки `if / elif / else / end`, циклы `repeat / break`,
+- `if / elif / else / end` blocks, `repeat / break` loops,
   `y_loop`, `x_loop`, `time_loop`.
-- `set_pixel`, `pixel`, `save_frame` с `%d` / `%03d`.
-- PNG через `stb_image_write.h` (single-header, без внешних зависимостей).
-- pthreads: `y_loop` делится по строкам, `--threads N` (по умолчанию —
-  число CPU); `save_frame` остаётся однопоточным.
-- Headless Vulkan compute: `src/vk_shader.c` — универсальный host,
-  `examples/vulkan/<name>/<name>.comp` — отдельный шейдер на эффект. `mathgfx-vk
-  --shader build/<name>.spv`; без окна и surface. На Mali-G615 1080p
-  2×SSAA для black hole — ~0.1 с, весь вызов с PNG — ~0.5 с.
-- Встроенное видео: H.264/MP4 через `libx264` + минимальный
-  ISO BMFF-муксер (`src/mp4.c`), и MJPEG/AVI fallback (`src/avi.c`).
-  `src/mux.c` сшивает PNG-секвенцию, `mathgfx video` рендерит сцену
-  прямо в writer. Без ffmpeg.
-- Восемь пример-сцен (SDF-кот, чёрная дыра, Земля и циклическая анимация облаков) и smoke-тесты, включая проверку структуры PNG.
-- POSIX-sh линтер сцен `tools/scene-lint.sh`.
+- `set_pixel`, `pixel`, `save_frame` with `%d` / `%03d`.
+- PNG via `stb_image_write.h` (single-header, no external deps).
+- pthreads: `y_loop` splits by rows, `--threads N` (default: CPU count);
+  `save_frame` stays single-threaded.
+- Headless Vulkan compute: `src/vk_shader.c` — universal host,
+  `examples/vulkan/<name>/<name>.comp` — one shader per effect.
+  `mathgfx-vk --shader build/<name>.spv`; no window or surface.
+  On Mali-G615 1080p 2×SSAA for black hole — ~0.1 s GPU, ~0.5 s total.
+- Built-in video: H.264/MP4 via `libx264` + minimal ISO BMFF muxer
+  (`src/mp4.c`), and MJPEG/AVI fallback (`src/avi.c`).
+  `src/mux.c` stitches PNG sequence, `mathgfx video` renders scene
+  directly into writer. No ffmpeg.
+- Eight example scenes (SDF cat, black hole, Earth, cyclic cloud
+  animation) and smoke tests including PNG structure validation.
+- POSIX sh scene linter `tools/scene-lint.sh`.
 
 ---
 
-## Язык MGF
+## MGF Language
 
-Файлы сцен — `.mgf`. Комментарии: `;` или `//` до конца строки.
-Регистр имён важен: `r0`, `X`, `sin`, `set_pixel`.
+Scene files are `.mgf`. Comments: `;` or `//` to end of line.
+Identifiers are case-sensitive: `r0`, `X`, `sin`, `set_pixel`.
 
 ### canvas
 
@@ -95,26 +96,26 @@ make test
 canvas 1280, 720
 ```
 
-Обязательная строка, одна на сцену. Ширина и высота — целые литералы
-в диапазоне `1..16384`; размер можно переопределить из CLI
-(`--width`, `--height`) — удобно для быстрых превью и тестов.
+Mandatory, one per scene. Width and height are integer literals in
+`1..16384`; size can be overridden from CLI (`--width`, `--height`)
+— useful for quick previews and tests.
 
-### Переменные
+### Variables
 
-| Имя  | Значение |
-|------|----------|
-| `X`, `Y` | координаты текущего пикселя, `0..W-1`, `0..H-1` |
-| `U`, `V` | `(X + 0.5) / W`, `(Y + 0.5) / H` — центры пикселей в `[0,1]` |
-| `T` | текущее время; `0` для статичной сцены |
-| `W`, `H` | размер canvas |
+| Name | Value |
+|------|-------|
+| `X`, `Y` | current pixel coordinates, `0..W-1`, `0..H-1` |
+| `U`, `V` | `(X + 0.5) / W`, `(Y + 0.5) / H` — pixel centers in `[0,1]` |
+| `T` | current time; `0` for static scene |
+| `W`, `H` | canvas size |
 | `PI` | 3.141592653589793 |
 
-### Регистры
+### Registers
 
-`r0..r15`, значения — `double`. Регистры **не сбрасываются на каждом
-пикселе**: это глобальные переменные VM. Если регистр используется в
-пикселе, его нужно явно установить (или он будет хранить значение с
-предыдущего пикселя). Стартовое значение — `0.0`.
+`r0..r15`, values are `double`. Registers **are not reset per pixel**:
+they are global VM variables. If a register is used in a pixel, it must
+be explicitly set (or it will hold the value from the previous pixel).
+Initial value is `0.0`.
 
 ```asm
 mov r0, U
@@ -122,54 +123,54 @@ mul r0, 2.0          ; r0 = r0 * 2.0
 add r0, 1.0
 ```
 
-### Выражения
+### Expressions
 
-Операнды инструкций могут быть выражениями — компилятор сам раскладывает
-их во временные слоты:
+Instruction operands can be expressions — the compiler lowers them to
+temporary stack slots:
 
 ```asm
 mov r0, 0.5 + 0.5 * sin(U * 8.0 + T * 1.3)
 ```
 
-Приоритеты (низкий → высокий):
+Precedence (low → high):
 
-1. сравнения: `< <= > >= == !=` (результат `1.0` / `0.0`)
+1. comparisons: `< <= > >= == !=` (result `1.0` / `0.0`)
 2. `+ -`
 3. `* / %`
-4. унарные `+ -`
-5. `^` (правоассоциативный)
+4. unary `+ -`
+5. `^` (right-associative)
 
-`-2^2` = `-(2^2)` = `-4`. `%` — остаток (`fmod`).
+`-2^2` = `-(2^2)` = `-4`. `%` is remainder (`fmod`).
 
-Функции:
+Functions:
 
-| Функция | Арность | Результат |
-|---------|---------|-----------|
-| `sin cos tan` | 1 | радианы |
+| Function | Arity | Result |
+|----------|-------|--------|
+| `sin cos tan` | 1 | radians |
 | `sqrt abs floor ceil fract` | 1 | `fract(x) = x - floor(x)` |
 | `min(a,b) max(a,b)` | 2 | — |
 | `pow(a,b) mod(a,b)` | 2 | — |
-| `atan2(y,x)` | 2 | радианы |
+| `atan2(y,x)` | 2 | radians |
 | `clamp(x,a,b)` | 3 | `min(max(x,a),b)` |
 | `lerp(a,b,t)` | 3 | `a + (b-a)*t` |
-| `smoothstep(a,b,t)` | 3 | плавная интерполяция `a..b` |
+| `smoothstep(a,b,t)` | 3 | smooth interpolation `a..b` |
 | `noise2(x,y)` | 2 | value noise, `[0,1)` |
 | `fbm2(x,y,octaves)` | 3 | fbm, `[0,1]`; octaves 1..10 |
 
-Запятые внутри вызова функции обязательны: `min(a, b)`.
+Commas inside function calls are required: `min(a, b)`.
 
-### Пиксели
+### Pixels
 
 ```asm
-set_pixel X, Y, r0, r1, r2   ; явные координаты
-pixel r0, r1, r2             ; текущие X, Y
+set_pixel X, Y, r0, r1, r2   ; explicit coordinates
+pixel r0, r1, r2             ; current X, Y
 ```
 
-Координаты берутся `floor(x)`, `floor(y)`. Выход за границы canvas
-игнорируется. Цвет — три `double`, обрезаются в `[0,1]` и округляются в
-8 бит. Альфа пока не поддерживается.
+Coordinates are `floor(x)`, `floor(y)`. Out-of-bounds is ignored.
+Color is three `double`, clamped to `[0,1]` and rounded to 8-bit.
+Alpha not yet supported.
 
-### Циклы
+### Loops
 
 ```asm
 y_loop
@@ -179,8 +180,8 @@ y_loop
 end
 ```
 
-`y_loop` перебирает `Y = 0..H-1`, `x_loop` — `X = 0..W-1`.
-Альтернатива — `pixel` внутри `x_loop`.
+`y_loop` iterates `Y = 0..H-1`, `x_loop` iterates `X = 0..W-1`.
+Alternative: `pixel` inside `x_loop`.
 
 `repeat`:
 
@@ -193,28 +194,28 @@ repeat 64
 end
 ```
 
-Счётчик вычисляется один раз, приводится к `floor`, ограничен 10 000 000.
-`break` работает в `repeat`, `y_loop`, `x_loop`, `time_loop`.
+Counter is evaluated once, floored, capped at 10,000,000.
+`break` works in `repeat`, `y_loop`, `x_loop`, `time_loop`.
 
 `time_loop`:
 
 ```asm
-time_loop 0.0, 10.0, 0.04   ; from (включительно), to (не включая), step
+time_loop 0.0, 10.0, 0.04   ; from (inclusive), to (exclusive), step
   ...
   save_frame "out/frame_%04d.png"
 end
 ```
 
-`T` меняется от `from` с шагом `step`, пока `T < to`. `step` должен быть
-`> 0`. Без `save_frame` останется только последний кадр в памяти.
+`T` runs from `from` with `step` while `T < to`. `step` must be `> 0`.
+Without `save_frame` only the last frame remains in memory.
 
-Для статичной сцены время можно задать вручную:
+For static scenes time can be set manually:
 
 ```asm
 time 1.25
 ```
 
-### Условия
+### Conditionals
 
 ```asm
 if U < 0.5
@@ -228,8 +229,8 @@ else
 end
 ```
 
-`elif` и `else if` — одно и то же; вся цепочка закрывается одним `end`.
-Обычный вложенный `if` на новой строке требует своего `end`.
+`elif` and `else if` are equivalent; the whole chain closes with one
+`end`. A regular nested `if` on a new line requires its own `end`.
 
 ### save_frame
 
@@ -237,17 +238,17 @@ end
 save_frame "out/frame_%04d.png"
 ```
 
-Пишет текущий кадр в PNG. `%d`, `%02d`, `%04d` заменяются на номер
-кадра (счётчик `save_frame`, начиная с 0). Каталоги создаются
-автоматически. Исторический вариант `save_frame T, "path"` тоже
-принимается — выражение перед строкой игнорируется.
+Writes current frame to PNG. `%d`, `%02d`, `%04d` are replaced by frame
+number (`save_frame` counter, starting at 0). Directories are created
+automatically. Legacy form `save_frame T, "path"` is also accepted — the
+expression before the string is ignored.
 
-Если сцена не вызывает `save_frame`, CLI пишет финальный кадр в
-`out.png` (или в путь, переданный вторым аргументом `render`).
+If the scene does not call `save_frame`, CLI writes the final frame to
+`out.png` (or the path passed as second argument to `render`).
 
 ---
 
-## Пример сцены
+## Example Scene
 
 `examples/plasma.mgf`:
 
@@ -264,187 +265,184 @@ y_loop
 end
 ```
 
-`examples/cat.mgf` — портрет кота из SDF-масок: эллипсы (голова, тело,
-глаза), треугольники (уши, нос), капсулы (усы, рот), аналитический
-антиалиасинг через `r9 = 1.5 / H`, полосы и шум на шерсти. Это уже не
-«градиент», а полноценная композиция на ~1800 инструкций на пиксель.
+`examples/cat.mgf` — cat portrait from SDF masks: ellipses (head, body,
+eyes), triangles (ears, nose), capsules (whiskers, mouth), analytical
+antialiasing via `r9 = 1.5 / H`, stripes and fur noise. Not just a
+"gradient" — a full composition at ~1800 instructions per pixel.
 
-`examples/earth.mgf` — процедурная Земля с атмосферой, биомами, облаками
-и ночными огнями; `examples/earth_clouds.mgf` — 12-секундный циклический
-пролёт облаков (CPU `time_loop` + `save_frame`, `make earth-video`).
+`examples/earth.mgf` — procedural Earth with atmosphere, biomes, clouds,
+and night lights; `examples/earth_clouds.mgf` — 12-second cyclic cloud
+flyover (CPU `time_loop` + `save_frame`, `make earth-video`).
 
 ---
 
-## Чёрная дыра
+## Black Hole
 
-`examples/blackhole.mgf` — рейтрейсинг шварцшильдовской чёрной дыры
-(`rs = 1`, `c = 1`). На пиксель: камера на `r = 24 rs`, наклон 12° над
-плоскостью диска, вертикальный half-FOV 18°.
+`examples/blackhole.mgf` — Schwarzschild black hole raytracing
+(`rs = 1`, `c = 1`). Per pixel: camera at `r = 24 rs`, inclination 12°
+above disk plane, vertical half-FOV 18°.
 
-Луч интегрируется leapfrog-шагом по уравнению нулевой геодезики в
-картезианской форме:
+Ray is integrated with leapfrog step using null geodesic equation in
+Cartesian form:
 
 ```text
 a = -1.5 * h^2 * r_vec / r^5        h = |r x v| = const
 ```
 
-Это эквивалент уравнения `u'' + u = 3 M u^2` при `M = 0.5`. Условия
-остановки:
+Equivalent to `u'' + u = 3 M u^2` with `M = 0.5`. Termination
+conditions:
 
-- `r < 1` — горизонт, чёрный;
-- пересечение плоскости `z = 0` в кольце `3..12 rs` — непрозрачный
-  тонкий диск;
-- `r > 40` и луч движется наружу — процедурный фон (звёзды + туманность).
+- `r < 1` — horizon, black;
+- crossing `z = 0` plane in ring `3..12 rs` — opaque thin disk;
+- `r > 40` and ray moving outward — procedural background (stars + nebula).
 
-Диск: кеплеровское вращение, фактор Доплера
-`D = 1 / (1 - beta * v_los)`, `beta = sqrt(0.5 / r)`, гравитационное
-красное смещение `sqrt(1 - 1/r)`, яркость `~D^3`, fbm-турбулентность,
-горячий внутренний ореол и мягкий внешний край. Диск бесконечно
-тонкий и оптически толстый: берётся первое пересечение плоскости;
-многократные изображения высших порядков не трассируются поштучно.
-Фотонное кольцо `b_c = 3*sqrt(3)/2 ~ 2.598 rs` поэтому дополнительно
-усилено гладкой компонентой — иначе пошаговое сэмплирование оставляет
-его пунктирным.
+Disk: Keplerian rotation, Doppler factor
+`D = 1 / (1 - beta * v_los)`, `beta = sqrt(0.5 / r)`, gravitational
+redshift `sqrt(1 - 1/r)`, brightness `~D^3`, fbm turbulence, hot inner
+glow and soft outer edge. Disk is infinitely thin and optically thick:
+first plane intersection is taken; higher-order images are not traced
+individually. Photon ring `b_c = 3*sqrt(3)/2 ~ 2.598 rs` is additionally
+boosted by a smooth component — otherwise stepwise sampling leaves it
+dotted.
 
-360 шагов на луч, ~920 инструкций в сцене.
+360 steps per ray, ~920 instructions in scene.
 
-- CPU: 1920×1080 — ~154 s в один поток, ~45–50 s на 8 потоках (pthreads по
-  строкам). `make blackhole-hq` делает CPU-рендер и Lanczos-даунскейл
-  до 1280×720/960×540.
-- Vulkan compute (Mali-G615): 1920×1080 с 2×SSAA — ~0.1 s на GPU,
-  ~0.5 s с учётом readback и PNG. Итог: `out/blackhole_vk.png`.
-  `examples/vulkan/blackhole/blackhole.comp` — та же модель, переписанная на GLSL float32;
-  железных RT-ядер нет, это compute-рейтрейсинг.
-- Видео: `make blackhole-vk-video` рендерит 5 секунд 1920×1080
-  (125 кадров, 25 fps) через тот же шейдер с `time` и пишет
+- CPU: 1920×1080 — ~154 s single-thread, ~45–50 s on 8 threads (pthreads
+  by rows). `make blackhole-hq` does CPU render + Lanczos downscale to
+  1280×720/960×540.
+- Vulkan compute (Mali-G615): 1920×1080 2×SSAA — ~0.1 s GPU, ~0.5 s
+  total. Output: `out/blackhole_vk.png`.
+  `examples/vulkan/blackhole/blackhole.comp` — same model, hand-ported
+  to GLSL float32; no hardware RT cores, this is compute raytracing.
+- Video: `make blackhole-vk-video` renders 5 s 1920×1080 (125 frames,
+  25 fps) through same shader with `time`, writes
   `out/blackhole_vk.mp4` (~9.2 s, ~1.7 MB, H.264). MJPEG/AVI fallback —
   `make blackhole-vk-video-avi` (~9.5 s, ~15 MB).
 
 ---
 
-## Vulkan: один шейдер на сцену
+## Vulkan: One Shader Per Scene
 
-`mathgfx-vk` намеренно не компилирует MGF и не притворяется общим
-GPU-бэкендом. Каждая тяжёлая сцена — отдельный compute-шейдер
+`mathgfx-vk` intentionally does not compile MGF and does not pretend to
+be a general GPU backend. Each heavy scene is a separate compute shader
 (`blackhole.comp`, `dof_demo.comp`, ...):
 
 ```
 examples/vulkan/blackhole/blackhole.comp  ->  build/blackhole.spv  ->  mathgfx-vk --shader ...
 ```
 
-Интерфейс шейдера:
+Shader interface:
 
 - `binding 0`: storage buffer `uint pixels[]`, packed `0x00BBGGRR`;
-- push constants (16 байт): `uint width, height; float time; uint frame`;
-- локальная группа 8×8, один invocation на пиксель.
+- push constants (16 bytes): `uint width, height; float time; uint frame`;
+- local group 8×8, one invocation per pixel.
 
-Добавить новый эффект:
+Add a new effect:
 
 ```sh
-# 1. написать examples/vulkan/foo/foo.comp
-# 2. собрать SPIR-V
+# 1. write examples/vulkan/foo/foo.comp
+# 2. compile SPIR-V
 glslangValidator -V -o build/foo.spv examples/vulkan/foo/foo.comp
-# 3. запустить тем же host-ом
+# 3. run with same host
 ./build/mathgfx-vk --shader build/foo.spv --width 1920 --height 1080 \
     --out out/foo.png
 ```
 
-Для двух текущих шейдеров в Makefile есть явные правила
-(`build/blackhole.spv`, `build/dof_demo.spv`). Для нового эффекта
-достаточно собрать SPIR-V через `glslangValidator` и запустить тот же
-`mathgfx-vk --shader build/foo.spv ...`. Host не меняется.
+For the two current shaders Makefile has explicit rules
+(`build/blackhole.spv`, `build/dof_demo.spv`). For a new effect just
+compile SPIR-V via `glslangValidator` and run the same
+`mathgfx-vk --shader build/foo.spv ...`. Host does not change.
 
 ---
 
-## DoF: честная тонкая линза
+## DoF: True Thin Lens
 
-`mathgfx-vk` умеет настоящий Depth of Field, а не экранный blur:
+`mathgfx-vk` does real Depth of Field, not screen-space blur:
 
 ```sh
---dof N        число сэмплов линзы на пиксель
---aperture A   радиус апертуры в rs (0 = pinhole)
---focus F      расстояние до фокальной плоскости в rs
+--dof N        lens samples per pixel
+--aperture A   aperture radius in rs (0 = pinhole)
+--focus F      focus distance in rs
 ```
 
-Для каждого сэмпла луч стартует в случайной точке диска апертуры и
-направляется в фокальную плоскость; дальше — та же геодезика, диск и
-фотонное кольцо. Никакого depth-буфера и пост-блюра.
+For each sample, ray starts at random point on aperture disk and aims
+at focal plane; then same geodesic, disk, and photon ring. No depth
+buffer, no post-blur.
 
 ```sh
-# 1080p, 64 сэмпла, мягкое киношное DoF
+# 1080p, 64 samples, soft cinematic DoF
 make blackhole-dof
 
-# вручную
+# manually
 ./build/mathgfx-vk --shader build/blackhole.spv \
     --width 1920 --height 1080 --ssaa 1 --gpu 0 \
     --dof 64 --aperture 0.4 --focus 24 --out out/blackhole_dof.png
 ```
 
-Результат: `out/blackhole_dof.png` (64 samples, aperture 0.4, focus
+Result: `out/blackhole_dof.png` (64 samples, aperture 0.4, focus
 24 rs, ~1.8 s GPU / ~2.5 s total). `out/blackhole_dof_wide.png` —
-вариант с aperture 0.8, сильнее размытие.
+aperture 0.8 variant, stronger blur.
 
-Физическая оговорка: на астрофизических масштабах DoF почти нулевой;
-`aperture 0.4–1.0 rs` при `focus 24 rs` — это киношная камера, а не
-реальный телескоп. Модель камеры при этом честная: тонкая линза,
-N независимых лучей, без фейкового пост-процесса. Для видео 8–16
-сэмплов дают мягкий фон, но может быть лёгкий шум; для стилла лучше
-64–128. Для видео есть цель `make blackhole-dof-video` (8 samples,
-125 кадров, ~32 s).
+Physical caveat: on astrophysical scales DoF is near zero; `aperture
+0.4–1.0 rs` at `focus 24 rs` is a cinematic camera, not a real
+telescope. Camera model is still honest: thin lens, N independent rays,
+no fake post-process. For video 8–16 samples give soft background with
+some noise; for stills 64–128 is better. Video target:
+`make blackhole-dof-video` (8 samples, 125 frames, ~32 s).
 
 ---
 
-## DoF-демо: боке-сферы
+## DoF Demo: Bokeh Spheres
 
-Специальный пример, где DoF читается сразу:
+A dedicated example where DoF is immediately visible:
 
 ```sh
 make dof-demo        # out/dof_demo.png, 1920x1080, 256 samples, ~1.5 s
-make dof-demo-video  # out/dof_demo.mp4, 120 кадров, 32 samples, focus pull, ~19 s
+make dof-demo-video  # out/dof_demo.mp4, 120 frames, 32 samples, focus pull, ~19 s
 ```
 
-Сцена: резкая янтарная сфера на фокусной плоскости, уходящий ряд
-глянцевых сфер, эмиссивные орбы на разных глубинах (их изображения
-превращаются в боке), глянцевый пол с сеткой, контактными тенями и
-отражениями. Камера — та же честная тонкая линза: `--dof 256
---aperture 0.32 --focus 5.0`. Никакого depth-буфера и пост-блюра.
+Scene: sharp amber sphere on focal plane, receding row of glossy
+spheres, emissive orbs at different depths (their images become bokeh),
+glossy floor with grid, contact shadows and reflections. Camera is the
+same honest thin lens: `--dof 256 --aperture 0.32 --focus 5.0`. No depth
+buffer, no post-blur.
 
-В видео сферы и орбы двигаются, а фокус плавно уезжает с передней
-сферы на задний план и возвращается (`--focus-end 9.0`). 120 кадров,
-32 samples, 1920×1080, H.264, ~9.7 МБ, ~19 s. Стоп-кадр в дальнем фокусе:
+In video, spheres and orbs move while focus smoothly pulls from front
+sphere to background and back (`--focus-end 9.0`). 120 frames, 32
+samples, 1920×1080, H.264, ~9.7 MB, ~19 s. Stop frame at far focus:
 `out/dof_demo_focus9.png`.
 
-Параметры подобраны так, чтобы передняя сфера была резкой, а фон —
-мягким; сетка на полу даёт очевидный depth cue, а орбы — крупное
-боке. В отличие от чёрной дыры (где на астрофизических масштабах DoF
-почти нет), здесь эффект — главный герой кадра.
+Parameters chosen so front sphere is sharp, background soft; floor grid
+gives clear depth cue, orbs produce large bokeh. Unlike black hole
+(where DoF is near zero on astrophysical scales), here the effect is
+the star of the frame.
 
-Замеры: 256 samples 1080p — ~0.8 s GPU / ~1.5 s total; видео 32
-samples, 125 кадров — 18.7 s (GPU 12.4 s, readback 1.5 s, encode 4.8 s),
+Measurements: 256 samples 1080p — ~0.8 s GPU / ~1.5 s total; video 32
+samples, 125 frames — 18.7 s (GPU 12.4 s, readback 1.5 s, encode 4.8 s),
 ~11 MB.
 
 ---
 
-## Видео без ffmpeg
+## Video Without ffmpeg
 
-В системе два встроенных видео-пути:
+Two built-in video paths:
 
-- **H.264/MP4** — `libx264` + собственный ISO BMFF/MP4-муксер
-  (`src/mp4.c`); качество задаётся `--crf` (0..51, меньше — лучше).
-- **MJPEG/AVI** — JPEG-кадры через `stb_image_write` + RIFF/AVI-муксер
-  (`src/avi.c`); качество задаётся `--quality` (1..100).
+- **H.264/MP4** — `libx264` + custom ISO BMFF/MP4 muxer
+  (`src/mp4.c`); quality via `--crf` (0..51, lower is better).
+- **MJPEG/AVI** — JPEG frames via `stb_image_write` + RIFF/AVI muxer
+  (`src/avi.c`); quality via `--quality` (1..100).
 
-Никакого `ffmpeg`, `popen` или внешних контейнеров. Для MP4 нужен
-`libx264` (`pkg install libx264`); AVI-путь работает без него.
+No `ffmpeg`, `popen`, or external containers. MP4 needs `libx264`
+(`pkg install libx264`); AVI path works without it.
 
 ```sh
-# 1. MP4 из сцены с time_loop + save_frame (рекомендуется для Android)
+# 1. MP4 from scene with time_loop + save_frame (recommended for Android)
 ./build/mathgfx video tests/anim.mgf out/anim.mp4 --fps 25 --crf 20
 
-# 2. сшить PNG-секвенцию в MP4
+# 2. Stitch PNG sequence into MP4
 ./build/mathgfx mux -o out/anim.mp4 --fps 25 --crf 20 out/frame_*.png
 
-# 3. Vulkan-анимация: time = --time + frame/fps
+# 3. Vulkan animation: time = --time + frame/fps
 ./build/mathgfx-vk --shader build/blackhole.spv \
     --width 1920 --height 1080 --ssaa 1 --gpu 0 \
     --video out/blackhole_vk.mp4 --frames 125 --fps 25 --crf 20
@@ -453,23 +451,22 @@ samples, 125 кадров — 18.7 s (GPU 12.4 s, readback 1.5 s, encode 4.8 s),
 ./build/mathgfx video tests/anim.mgf out/anim.avi --fps 25 --quality 90
 ```
 
-Для `mathgfx video` путь в `save_frame` игнорируется — кадр уходит в
-writer, а не в PNG.
+For `mathgfx video` the `save_frame` path is ignored — frame goes to
+writer, not PNG.
 
-Почему AVI мог открыться чёрным: файл был валидным MJPEG/AVI (кадры
-читаются), но Android-плеер часто не поддерживает MJPEG/AVI. MP4/H.264
-играется нативно. Размеры одного и того же 5-секундного 1080p-клипа:
-MP4 — ~1.7 MB, AVI/MJPEG — ~15 MB.
+Why AVI might open black: file was valid MJPEG/AVI (frames readable),
+but Android players often don't support MJPEG/AVI. MP4/H.264 plays
+natively. Sizes for same 5 s 1080p clip: MP4 — ~1.7 MB, AVI/MJPEG — ~15 MB.
 
-Ограничения: звука нет; HEVC/VP9/AV1 и аппаратный видео-энкодер пока
-не подключены. MJPEG остаётся fallback-ом и хорошо подходит для VLC/mpv.
+Limitations: no audio; HEVC/VP9/AV1 and hardware video encoder not yet
+connected. MJPEG remains fallback and works well for VLC/mpv.
 
 ---
 
 ## CLI
 
 ```
-mathgfx render <scene.mgf> [out.png] [--width N] [--height N] [--threads N]
+mathgfx render <scene.mgf> [out.png] [--width N] [--height N] [--threads N] [--ssaa N]
 mathgfx check <scene.mgf> [more.mgf ...]
 mathgfx video <scene.mgf> <out.mp4|out.avi> [--fps N] [--crf N]
                 [--quality N] [--width N] [--height N]
@@ -485,27 +482,27 @@ mathgfx-vk [--shader build/blackhole.spv] [--width N] [--height N]
            [--crf N] [--quality N] [--list-gpus]
 ```
 
-`render` печатает время и число потоков. Без `--threads` берётся
-`nproc` (до 64); сцены с `save_frame` и без `y_loop` рендерятся в один
-поток. `check` компилирует сцену и показывает размер, число инструкций
-и строковых констант.
+`render` prints time and thread count. Without `--threads` uses `nproc`
+(up to 64); scenes with `save_frame` and without `y_loop` render
+single-threaded. `check` compiles scene and shows size, instruction
+count, and string constants.
 
-`video` рендерит `time_loop` + `save_frame` прямо в writer: пути
-`save_frame` игнорируются, кадры уходят в MP4 или AVI по расширению.
-`mux` сшивает готовые PNG в тот же формат. `mathgfx-vk` — отдельный
-headless Vulkan compute host; он запускает любой совместимый SPIR-V
-(`--shader`), `--ssaa N` рендерит в N× разрешении и усредняет при
-readback. С `--video` он рендерит N кадров с меняющимся `time` и пишет
-MP4 или AVI по расширению.
+`video` renders `time_loop` + `save_frame` directly into writer:
+`save_frame` paths are ignored, frames go to MP4 or AVI by extension.
+`mux` stitches ready PNGs into same format. `mathgfx-vk` — separate
+headless Vulkan compute host; runs any compatible SPIR-V (`--shader`),
+`--ssaa N` renders at N× resolution and box-downsamples on readback.
+With `--video` it renders N frames with changing `time` and writes MP4
+or AVI by extension.
 
 ---
 
-## Архитектура
+## Architecture
 
 ```
 scene.mgf
-   │
-   ▼
+    │
+    ▼
 lexer.c ── tokens ──▶ parser.c ── Instr[] ──▶ vm.c ── RGB8 ──┬──▶ stb_image_write ──▶ PNG
                               (one pass)         │           │
                                                  │           └──▶ video.c ──┬──▶ avi.c ──▶ AVI
@@ -513,82 +510,80 @@ lexer.c ── tokens ──▶ parser.c ── Instr[] ──▶ vm.c ── RG
                                                  └── save_frame / time_loop
 ```
 
-- `src/lexer.c` — токены, позиции `line:col`, строковые литералы.
-- `src/parser.c` — рекурсивный спуск, сразу генерирует байткод
-  (AST не строится), патчит прыжки блоков.
-- `src/vm.c` — регистры `double`, стек выражений, циклы, шум, запись
-  пикселей и кадров, pthreads-рендер по строкам, frame-sink для видео.
-- `src/png.c` — PNG/JPEG через `third_party/stb_image_write.h`,
-  `mkdir -p` для путей кадров.
-- `src/avi.c` — RIFF/AVI-муксер и JPEG-кодирование кадров.
-- `src/mp4.c` — H.264 через libx264 + ISO BMFF/MP4-муксер.
-- `src/video.c` — выбор writer-а по расширению `.avi`/`.mp4`.
-- `src/mux.c` — PNG-секвенция → AVI/MP4 (stb_image).
-- `src/main.c` — CLI, включая `video` и `mux`.
+- `src/lexer.c` — tokens, `line:col` positions, string literals.
+- `src/parser.c` — recursive descent, emits bytecode directly
+  (no AST), patches block jumps.
+- `src/vm.c` — `double` registers, expression stack, loops, noise,
+  pixel/frame write, pthreads by rows, frame-sink for video.
+- `src/png.c` — PNG/JPEG via `third_party/stb_image_write.h`,
+  `mkdir -p` for frame paths.
+- `src/avi.c` — RIFF/AVI muxer and JPEG frame encoding.
+- `src/mp4.c` — H.264 via libx264 + ISO BMFF/MP4 muxer.
+- `src/video.c` — writer selection by `.avi`/`.mp4` extension.
+- `src/mux.c` — PNG sequence → AVI/MP4 (stb_image).
+- `src/main.c` — CLI including `video` and `mux`.
 
-GPU-путь для чёрной дыры:
+GPU path for black hole:
 
 ```
 examples/vulkan/blackhole/blackhole.comp ── glslangValidator ──▶ build/blackhole.spv
-        (float32-порт blackhole.mgf)                       │
-                                                           ▼
-                           mathgfx-vk --shader build/blackhole.spv
-                                                           │
-                                                           ▼
-                              Vulkan compute -> readback -> box SSAA
-                                                           │
-                                                           ▼
-                                              PNG / MP4 / AVI
+        (float32 port of blackhole.mgf)                       │
+                                                            ▼
+                                               mathgfx-vk --shader build/blackhole.spv
+                                                            │
+                                                            ▼
+                                           Vulkan compute -> readback -> box SSAA
+                                                            │
+                                                            ▼
+                                               PNG / MP4 / AVI
 ```
 
-- `examples/vulkan/blackhole/blackhole.comp` — GLSL compute 8×8, float32; ручной порт той
-  же модели: геодезики, диск и фотонное кольцо. Из `.mgf` не
-  генерируется — это отдельный GPU-бэкенд, а не общий DSL-компилятор.
-- `src/vk_shader.c` — универсальный headless Vulkan host: instance →
+- `examples/vulkan/blackhole/blackhole.comp` — GLSL compute 8×8, float32;
+  hand port of same model: geodesics, disk, photon ring. Not generated
+  from `.mgf` — separate GPU backend, not a general DSL compiler.
+- `src/vk_shader.c` — universal headless Vulkan host: instance →
   physical device → compute queue → storage buffer → dispatch → readback
-  → PNG или AVI. Он не знает про чёрную дыру; конкретный эффект задаётся
+  → PNG or AVI. Knows nothing about black hole; specific effect set via
   `--shader`.
-- Сборка требует `vulkan-loader`, `vulkan-headers` и `glslangValidator`
-  (в Termux: `pkg install vulkan-loader vulkan-headers vulkan-tools glslang`).
-  Для Mali используется `vulkan-wrapper-android`; для софтверного
-  fallback — `mesa-vulkan-icd-swrast` (lavapipe).
-- `--gpu` выбирает физическое устройство; `--list-gpus` показывает
-  Mali и lavapipe.
+- Build requires `vulkan-loader`, `vulkan-headers`, `glslangValidator`
+  (Termux: `pkg install vulkan-loader vulkan-headers vulkan-tools glslang`).
+  For Mali uses `vulkan-wrapper-android`; for software fallback —
+  `mesa-vulkan-icd-swrast` (lavapipe).
+- `--gpu` selects physical device; `--list-gpus` shows Mali and lavapipe.
 
-Почему ядро на C:
+Why C core:
 
-- per-pixel математике нужны `double`, `sin/cos/sqrt` и предсказуемая
-  скорость; C даёт это без fixed-point-прослоек;
-- ядро остаётся маленьким и переносимым: C99 + `-lm` + `-pthread`;
-- Vulkan-бэкенд подключается отдельным бинарником и не тянет за собой
-  софтверный путь.
+- Per-pixel math needs `double`, `sin/cos/sqrt` and predictable speed;
+  C gives this without fixed-point layers.
+- Core stays small and portable: C99 + `-lm` + `-pthread`.
+- Vulkan backend is a separate binary, doesn't drag software path.
 
-Тулинг — обычный POSIX sh: `tools/scene-lint.sh` проверяет `canvas` и
-баланс блоков без интерпретатора и внешних зависимостей.
+Tooling is plain POSIX sh: `tools/scene-lint.sh` checks `canvas` and
+block balance without interpreter or external deps.
 
 ---
 
-## SH-линтер
+## SH Linter
 
 ```sh
 make lint
-# или
+# or
 sh tools/scene-lint.sh examples
 sh tools/scene-lint.sh tests
 ```
 
-Проверяет для каждого `*.mgf`:
+Checks each `*.mgf`:
 
-- есть ли `canvas`;
-- баланс открывающих блоков (`if`, `repeat`, `y_loop`, `x_loop`,
-  `time_loop`) и `end`;
-- печатает `lines`, `blocks`, `pixels`, `canvas` и `OK/WARN`.
+- has `canvas`;
+- balance of opening blocks (`if`, `repeat`, `y_loop`, `x_loop`,
+  `time_loop`) and `end`;
+- prints `lines`, `blocks`, `pixels`, `canvas` and `OK/WARN`.
 
-Код возврата — `0`, если все сцены чистые, иначе `1`.
+Exit code `0` if all scenes clean, else `1`.
 
 ---
 
-## Тесты
+## Tests
 
 ```sh
 make test
@@ -596,95 +591,100 @@ make test
 
 `tests/run.sh`:
 
-- компилирует все примеры;
-- рендерит их в 64×36 и проверяет PNG через `tests/check_png.py`
-  (сигнатура, IHDR, zlib-поток, точная длина распакованных строк);
-- проверяет цвета всех четырёх веток `if/elif/else if/else` через
-  `tests/check_pixels.py` (полный PNG-анфильтр, сверка RGB);
-- проверяет, что рендер в 1 поток и в 8 потоков даёт побайтово
-  одинаковый PNG (детерминизм строк);
-- проверяет `time_loop` + `save_frame` (ровно 3 кадра `frame_000..002`);
-- проверяет `mathgfx video` и `mathgfx mux`:
+- compiles all examples;
+- renders them at 64×36 and validates PNG via `tests/check_png.py`
+  (signature, IHDR, zlib stream, exact decompressed row lengths);
+- checks colors of all four `if/elif/else if/else` branches via
+  `tests/check_pixels.py` (full PNG unfilter, RGB compare);
+- verifies 1-thread and 8-thread renders produce byte-identical PNG
+  (row determinism);
+- checks `time_loop` + `save_frame` (exactly 3 frames `frame_000..002`);
+- checks `mathgfx video` and `mathgfx mux`:
   - MP4: `ftyp`/`moov`/`mdat`, `avc1`/`avcC`, SPS/PPS, `stsz`/`stco`/
-    `stts`/`stsc`/`stss`, длины NAL — `tests/check_mp4.py`;
-  - AVI: RIFF/AVI, MJPG, `movi`, `idx1`, декодирование JPEG-кадров через
+    `stts`/`stsc`/`stss`, NAL lengths — `tests/check_mp4.py`;
+  - AVI: RIFF/AVI, MJPG, `movi`, `idx1`, JPEG decode via
     `tests/check_avi.py` (PIL);
-- проверяет, что битые сцены (`bad_syntax`, `bad_time`) отвергаются;
-- проверяет override размеров через CLI.
+- verifies broken scenes (`bad_syntax`, `bad_time`) are rejected;
+- checks CLI size override.
 
-Отдельно: `make test-vk` — Vulkan PNG + Vulkan MP4 + Vulkan AVI.
+Separate: `make test-vk` — Vulkan PNG + Vulkan MP4 + Vulkan AVI.
 
 ---
 
-## Производительность
+## Performance
 
-Замеры на Termux/aarch64 (Mali-G615, 8 CPU), включая PNG/JPEG/H.264-кодирование.
-CPU-цифры — если не указано иное, в один поток:
+Measurements on Termux/aarch64 (Mali-G615, 8 CPU), including
+PNG/JPEG/H.264 encoding. CPU numbers are single-threaded unless noted:
 
-| Сцена | Размер | Время |
-|-------|--------|-------|
+| Scene | Size | Time |
+|-------|------|------|
 | gradient | 1280×720 | ~0.10 s |
 | plasma | 1280×720 | ~0.38 s |
 | noise | 1280×720 | ~0.66 s |
-| mandelbrot (96 итераций) | 960×540 | ~1.7 s |
-| cat (SDF-портрет) | 1280×720 | ~9.8 s |
-| earth (планета) | 1280×720 | ~2.4 s (8 потоков) |
-| blackhole (360 шагов/луч) | 640×360 | ~17 s (1 поток) |
-| blackhole | 960×540 | ~40 s (1 поток) / ~12 s (8) |
-| blackhole | 1920×1080 | ~154 s (1 поток) / ~45–50 s (8) |
+| mandelbrot (96 iter) | 960×540 | ~1.7 s |
+| cat (SDF portrait) | 1280×720 | ~9.8 s |
+| earth (planet) | 1280×720 | ~2.4 s (8 threads) |
+| blackhole (360 steps/ray) | 640×360 | ~17 s (1 thread) |
+| blackhole | 960×540 | ~40 s (1 thread) / ~12 s (8) |
+| blackhole | 1920×1080 | ~154 s (1 thread) / ~45–50 s (8) |
 | blackhole Vulkan 2×SSAA | 1920×1080 | ~0.1 s GPU / ~0.5 s total |
-| blackhole Vulkan video, 125 кадров, MP4 | 1920×1080 | ~9.2 s, ~1.7 MB |
-| blackhole Vulkan video, 125 кадров, AVI | 1920×1080 | ~9.5 s, ~15 MB |
+| blackhole Vulkan video, 125 frames, MP4 | 1920×1080 | ~9.2 s, ~1.7 MB |
+| blackhole Vulkan video, 125 frames, AVI | 1920×1080 | ~9.5 s, ~15 MB |
 | blackhole Vulkan DoF, 64 samples | 1920×1080 | ~1.8 s GPU / ~2.5 s total |
-| blackhole Vulkan DoF video, 8 samples | 1920×1080 | ~32 s (125 кадров) |
+| blackhole Vulkan DoF video, 8 samples | 1920×1080 | ~32 s (125 frames) |
 | DoF demo still, 256 samples | 1920×1080 | ~0.8 s GPU / ~1.5 s total |
-| DoF demo video, 32 samples, focus pull | 1920×1080 | ~19 s (120 кадров), ~9.7 MB |
+| DoF demo video, 32 samples, focus pull | 1920×1080 | ~19 s (120 frames), ~9.7 MB |
 
-Узкие места CPU: интерпретация байткода на пиксель и PNG/JPEG-компрессия.
-pthreads уже включён; следующий шаг — встроенный SSAA CPU. Vulkan остаётся
-набором per-scene шейдеров, а не общим DSL-бэкендом.
+CPU bottlenecks: bytecode interpretation per pixel and PNG/JPEG
+compression. pthreads already enabled; next step — built-in CPU SSAA.
+Vulkan remains per-scene shaders, not a general DSL backend.
 
 ---
 
-## Ограничения v0.1
+## Limitations v0.1
 
-- Видео: H.264/MP4 и MJPEG/AVI. Звука, HEVC/VP9/AV1 и аппаратного
-  видео-энкодера пока нет; MJPEG остаётся fallback-ом.
-- Нет загрузки PNG-текстур и сэмплинга (декодер stb_image уже есть для
-  `mux`, но `sample(u,v)` в DSL ещё не проброшен).
-- Нет alpha-канала, HDR и гамма-коррекции.
-- pthreads есть, но `save_frame`/видео-путь идёт в один поток.
-- Нет include-файлов сцен и строковых переменных.
-- Нет JIT.
-- Vulkan-host универсален по SPIR-V, но шейдеры пишутся на каждый
-  эффект; общего MGF→GPU компилятора нет. GPU-код использует float32,
-  без float64 и hardware RT.
+- Video: H.264/MP4 and MJPEG/AVI only. No audio, HEVC/VP9/AV1, or
+  hardware video encoder yet; MJPEG remains fallback.
+- No PNG texture loading/sampling (stb_image decoder exists for `mux`,
+  but `sample(u,v)` not yet exposed in DSL).
+- No alpha channel, HDR, or gamma correction.
+- pthreads exists, but `save_frame`/video path is single-threaded.
+- No scene include files or string variables.
+- No JIT.
+- Vulkan host is universal over SPIR-V, but shaders are written per
+  effect; no general MGF→GPU compiler. GPU code uses float32, no
+  float64 or hardware RT.
+- **CPU vs GPU precision mismatch:** CPU VM uses `double` (64-bit);
+  Vulkan shaders use `float` (32-bit). This causes visible differences
+  in precision-sensitive scenes (e.g., black hole geodesics near the
+  photon ring). For exact cross-validation, use `--fp32` (planned) or
+  compare visually. The DSL has no type annotations; all math is `double`
+  on CPU and `float` on GPU.
 
 ---
 
 ## Roadmap
 
-1. Больше встроенных форматов: звук, HEVC/VP9/AV1, GIF/APNG.
-2. Встроенный SSAA в CPU-путь (сейчас снаружи: рендер 2× + Lanczos).
-3. `sample(u, v)` для PNG-текстур (stb_image).
-4. Больше математики: `log exp sign step smoothstep` для векторов,
-   gradient noise, curl noise.
-5. JIT-компиляция байткода в C или прямой threaded-code интерпретатор.
-6. Новые per-scene Vulkan-шейдеры: Kerr, джеты, планеты, туманности.
-7. Расширение shell-тулинга: генератор сцен, статистика, проверка
-   палитр.
+1. More built-in formats: audio, HEVC/VP9/AV1, GIF/APNG.
+2. Built-in SSAA in CPU path (currently external: 2× render + Lanczos).
+3. `sample(u, v)` for PNG textures (stb_image).
+4. More math: `log exp sign step smoothstep` for vectors, gradient
+   noise, curl noise.
+5. JIT bytecode compilation to C or direct threaded-code interpreter.
+6. New per-scene Vulkan shaders: Kerr, jets, planets, nebulae.
+7. Extended shell tooling: scene generator, statistics, palette checks.
 
 ---
 
-## Структура
+## Structure
 
 ```
 MathGFX/
-├── include/mgfx.h            публичный API, опкоды, лимиты
+├── include/mgfx.h            public API, opcodes, limits
 ├── src/
-│   ├── internal.h            токены и лексер
+│   ├── internal.h            tokens and lexer
 │   ├── lexer.c
-│   ├── parser.c              парсер + компилятор в байткод
+│   ├── parser.c              parser + bytecode compiler
 │   ├── vm.c                  VM, pthreads, frame-sink
 │   ├── png.c                 PNG/JPEG + mkdir -p
 │   ├── avi.c / avi.h         MJPEG AVI muxer
@@ -713,12 +713,12 @@ MathGFX/
 │   ├── branches.mgf
 │   ├── bad_syntax.mgf
 │   └── bad_time.mgf
-├── tools/scene-lint.sh       POSIX-sh линтер сцен
+├── tools/scene-lint.sh       POSIX-sh scene linter
 ├── Makefile
 ├── README.md
 └── Project.md
 ```
 
-`stb_image_write.h` и `stb_image.h` — public domain / MIT (Sean Barrett),
-лежат в `third_party/` как single-header. H.264-энкодер — системный
+`stb_image_write.h` and `stb_image.h` — public domain / MIT (Sean
+Barrett), in `third_party/` as single-header. H.264 encoder — system
 `libx264` (`pkg install libx264`).

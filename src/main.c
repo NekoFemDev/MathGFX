@@ -14,7 +14,7 @@ static void usage(FILE *f)
         "MathGFX %s — software procedural renderer\n"
         "\n"
         "usage:\n"
-        "  mathgfx render <scene.mgf> [out.png] [--width N] [--height N] [--threads N]\n"
+        "  mathgfx render <scene.mgf> [out.png] [--width N] [--height N] [--threads N] [--ssaa N]\n"
         "  mathgfx check <scene.mgf> [more.mgf ...]\n"
         "  mathgfx video <scene.mgf> <out.avi|out.mp4> [--fps N] [--quality N] [--crf N]\n"
         "                  [--width N] [--height N]\n"
@@ -59,6 +59,7 @@ static int cmd_render(int argc, char **argv)
     int width = 0;
     int height = 0;
     int threads = 0;
+    int ssaa = 1;
     int i;
     Program prog;
     RenderResult res;
@@ -90,6 +91,20 @@ static int cmd_render(int argc, char **argv)
                 return 2;
             }
             threads = (int)v;
+        } else if (strcmp(argv[i], "--ssaa") == 0) {
+            char *end = NULL;
+            long v;
+            if (++i >= argc) {
+                fprintf(stderr, "mathgfx: bad --ssaa\n");
+                return 2;
+            }
+            errno = 0;
+            v = strtol(argv[i], &end, 10);
+            if (errno || !end || *end || v < 1 || v > 4) {
+                fprintf(stderr, "mathgfx: bad --ssaa (1..4)\n");
+                return 2;
+            }
+            ssaa = (int)v;
         } else if (argv[i][0] == '-') {
             fprintf(stderr, "mathgfx: unknown option '%s'\n", argv[i]);
             return 2;
@@ -126,8 +141,27 @@ static int cmd_render(int argc, char **argv)
     if (!prog.has_yloop || prog.has_save_frame)
         threads = 1;
 
+    /* SSAA: render at higher resolution, then downsample */
+    int render_w = width > 0 ? width : prog.canvas_w;
+    int render_h = height > 0 ? height : prog.canvas_h;
+    if (render_w <= 0 || render_h <= 0) {
+        fprintf(stderr, "mathgfx: invalid canvas size\n");
+        program_free(&prog);
+        return 1;
+    }
+    if (ssaa > 1) {
+        render_w *= ssaa;
+        render_h *= ssaa;
+        if (render_w > MGFX_MAX_DIM || render_h > MGFX_MAX_DIM) {
+            fprintf(stderr, "mathgfx: SSAA resolution %dx%d exceeds max %d\n",
+                    render_w, render_h, MGFX_MAX_DIM);
+            program_free(&prog);
+            return 1;
+        }
+    }
+
     t0 = mgfx_now_sec();
-    if (mgfx_render(&prog, width, height, threads, &res, err, sizeof(err)) != 0) {
+    if (mgfx_render(&prog, render_w, render_h, threads, &res, err, sizeof(err)) != 0) {
         fprintf(stderr, "mathgfx: %s\n", err);
         program_free(&prog);
         return 1;
@@ -138,14 +172,39 @@ static int cmd_render(int argc, char **argv)
         printf("wrote %d frame(s) from %s (%.3fs, %d thread(s))\n",
                res.frames, scene, t1 - t0, threads);
     } else {
-        if (!mgfx_write_png(out_path, res.width, res.height, res.pixels)) {
+        unsigned char *final_pixels = res.pixels;
+        int final_w = res.width;
+        int final_h = res.height;
+
+        if (ssaa > 1) {
+            final_w = width > 0 ? width : prog.canvas_w;
+            final_h = height > 0 ? height : prog.canvas_h;
+            unsigned char *ds = (unsigned char *)malloc((size_t)final_w * final_h * 3);
+            if (!ds) {
+                fprintf(stderr, "mathgfx: out of memory for downsample\n");
+                mgfx_render_free(&res);
+                program_free(&prog);
+                return 1;
+            }
+            mgfx_downsample_box(res.pixels, res.width, res.height, ssaa, ds);
+            free(res.pixels);
+            res.pixels = NULL;  /* avoid double-free in mgfx_render_free */
+            final_pixels = ds;
+        }
+
+        if (!mgfx_write_png(out_path, final_w, final_h, final_pixels)) {
             fprintf(stderr, "mathgfx: cannot write '%s'\n", out_path);
+            free(final_pixels);
             mgfx_render_free(&res);
             program_free(&prog);
             return 1;
         }
-        printf("rendered %dx%d -> %s (%.3fs, %d thread(s))\n",
-               res.width, res.height, out_path, t1 - t0, threads);
+        printf("rendered %dx%d -> %s (%.3fs, %d thread(s)%s)\n",
+               final_w, final_h, out_path, t1 - t0, threads,
+               ssaa > 1 ? ", SSAA" : "");
+
+        if (ssaa > 1)
+            free(final_pixels);
     }
 
     mgfx_render_free(&res);

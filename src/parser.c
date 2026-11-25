@@ -9,6 +9,96 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* ---- arena allocator implementation ------------------------------------- */
+
+static const size_t ARENA_DEFAULT_CHUNK = 64 * 1024;
+
+void arena_init(Arena *a, size_t chunk_size)
+{
+    a->head = NULL;
+    a->tail = NULL;
+    a->chunk_size = chunk_size ? chunk_size : ARENA_DEFAULT_CHUNK;
+}
+
+void arena_free(Arena *a)
+{
+    ArenaChunk *c = a->head;
+    while (c) {
+        ArenaChunk *next = c->next;
+        free(c);
+        c = next;
+    }
+    a->head = a->tail = NULL;
+}
+
+static ArenaChunk *arena_new_chunk(Arena *a, size_t min_size)
+{
+    size_t cap = a->chunk_size;
+    if (cap < min_size)
+        cap = min_size;
+    ArenaChunk *c = (ArenaChunk *)malloc(sizeof(ArenaChunk) + cap);
+    if (!c)
+        return NULL;
+    c->next = NULL;
+    c->used = 0;
+    c->cap = cap;
+    if (!a->head)
+        a->head = c;
+    if (a->tail)
+        a->tail->next = c;
+    a->tail = c;
+    return c;
+}
+
+void *arena_alloc(Arena *a, size_t size, size_t align)
+{
+    if (!a->tail) {
+        if (!arena_new_chunk(a, size))
+            return NULL;
+    }
+    ArenaChunk *c = a->tail;
+    uintptr_t ptr = (uintptr_t)(c->data + c->used);
+    uintptr_t aligned = (ptr + align - 1) & ~(align - 1);
+    size_t padding = aligned - ptr;
+    if (c->used + padding + size > c->cap) {
+        if (!arena_new_chunk(a, size))
+            return NULL;
+        c = a->tail;
+        ptr = (uintptr_t)c->data;
+        aligned = (ptr + align - 1) & ~(align - 1);
+        padding = aligned - ptr;
+    }
+    c->used += padding + size;
+    return (void *)aligned;
+}
+
+void *arena_alloc_zero(Arena *a, size_t size, size_t align)
+{
+    void *p = arena_alloc(a, size, align);
+    if (p)
+        memset(p, 0, size);
+    return p;
+}
+
+char *arena_strdup(Arena *a, const char *s)
+{
+    size_t len = strlen(s) + 1;
+    char *p = (char *)arena_alloc(a, len, 1);
+    if (p)
+        memcpy(p, s, len);
+    return p;
+}
+
+void arena_reset(Arena *a)
+{
+    ArenaChunk *c = a->head;
+    while (c) {
+        c->used = 0;
+        c = c->next;
+    }
+    a->tail = a->head;
+}
+
 typedef enum {
     BLK_IF = 0,
     BLK_REPEAT,
@@ -31,6 +121,8 @@ typedef struct {
     const char *file;
     jmp_buf jb;
     char err[600];
+
+    Arena arena;
 
     Instr *code;
     int ncode;
@@ -127,9 +219,12 @@ static int emit(Parser *p, unsigned char op, int a, int b, double d)
 {
     if (p->ncode >= p->cap) {
         int ncap = p->cap ? p->cap * 2 : 256;
-        Instr *n = (Instr *)realloc(p->code, (size_t)ncap * sizeof(Instr));
+        Instr *n = (Instr *)arena_alloc(&p->arena, (size_t)ncap * sizeof(Instr), _Alignof(Instr));
         if (!n)
             perr(p, "out of memory");
+        /* copy old instructions */
+        if (p->code && p->ncode > 0)
+            memcpy(n, p->code, (size_t)p->ncode * sizeof(Instr));
         p->code = n;
         p->cap = ncap;
     }
@@ -152,13 +247,16 @@ static int add_string(Parser *p, const char *s)
 {
     if (p->nstrings >= p->capstr) {
         int ncap = p->capstr ? p->capstr * 2 : 8;
-        char **n = (char **)realloc(p->strings, (size_t)ncap * sizeof(char *));
+        char **n = (char **)arena_alloc(&p->arena, (size_t)ncap * sizeof(char *), _Alignof(char *));
         if (!n)
             perr(p, "out of memory");
+        /* copy old string pointers */
+        if (p->strings && p->nstrings > 0)
+            memcpy(n, p->strings, (size_t)p->nstrings * sizeof(char *));
         p->strings = n;
         p->capstr = ncap;
     }
-    p->strings[p->nstrings] = strdup(s);
+    p->strings[p->nstrings] = arena_strdup(&p->arena, s);
     if (!p->strings[p->nstrings])
         perr(p, "out of memory");
     return p->nstrings++;
@@ -698,6 +796,8 @@ static void parse_stmt(Parser *p)
     if (strcmp(s, "canvas") == 0) {
         stmt_canvas(p);
     } else if (strcmp(s, "mov") == 0 || strcmp(s, "set") == 0) {
+        if (strcmp(s, "set") == 0)
+            fprintf(stderr, "warning: 'set' is deprecated, use 'mov' instead\n");
         int r;
         advance(p);
         r = parse_reg(p);
@@ -801,18 +901,13 @@ void program_free(Program *p)
 
 static void parser_free(Parser *p)
 {
-    int i;
-    free(p->code);
-    for (i = 0; i < p->nstrings; i++)
-        free(p->strings[i]);
-    free(p->strings);
+    arena_free(&p->arena);
 }
 
 int mgfx_compile_file(const char *path, Program *out, char *err, size_t errsz)
 {
     FILE *f;
     long sz;
-    char *src = NULL;
     Parser *p;
     volatile int rc = -1;
 
@@ -839,27 +934,35 @@ int mgfx_compile_file(const char *path, Program *out, char *err, size_t errsz)
         snprintf(err, errsz, "%s: cannot seek", path);
         return -1;
     }
-    src = (char *)malloc((size_t)sz + 1);
+
+    /* Allocate parser + source buffer from a single arena */
+    p = (Parser *)calloc(1, sizeof(Parser));
+    if (!p) {
+        fclose(f);
+        snprintf(err, errsz, "out of memory");
+        return -1;
+    }
+    arena_init(&p->arena, 64 * 1024);
+
+    /* Read source into arena */
+    char *src = (char *)arena_alloc(&p->arena, (size_t)sz + 1, 1);
     if (!src) {
         fclose(f);
+        parser_free(p);
+        free(p);
         snprintf(err, errsz, "out of memory");
         return -1;
     }
     if (sz > 0 && fread(src, 1, (size_t)sz, f) != (size_t)sz) {
         fclose(f);
-        free(src);
+        parser_free(p);
+        free(p);
         snprintf(err, errsz, "%s: cannot read file", path);
         return -1;
     }
     fclose(f);
     src[sz] = '\0';
 
-    p = (Parser *)calloc(1, sizeof(Parser));
-    if (!p) {
-        free(src);
-        snprintf(err, errsz, "out of memory");
-        return -1;
-    }
     p->file = path;
     p->canvas_w = 0;
     p->canvas_h = 0;
@@ -867,9 +970,21 @@ int mgfx_compile_file(const char *path, Program *out, char *err, size_t errsz)
     if (setjmp(p->jb) == 0) {
         lexer_init(&p->lx, src, (size_t)sz);
         parse_program(p);
-        out->code = p->code;
+
+        /* Transfer ownership to Program: copy from arena to malloc'd memory */
+        out->code = (Instr *)malloc((size_t)p->ncode * sizeof(Instr));
+        out->strings = (char **)malloc((size_t)p->nstrings * sizeof(char *));
+        if (!out->code || (p->nstrings > 0 && !out->strings)) {
+            free(out->code);
+            free(out->strings);
+            perr(p, "out of memory");
+        }
+        if (p->ncode > 0)
+            memcpy(out->code, p->code, (size_t)p->ncode * sizeof(Instr));
+        for (int i = 0; i < p->nstrings; i++)
+            out->strings[i] = strdup(p->strings[i]);
+
         out->ncode = p->ncode;
-        out->strings = p->strings;
         out->nstrings = p->nstrings;
         out->canvas_w = p->canvas_w;
         out->canvas_h = p->canvas_h;
@@ -884,12 +999,6 @@ int mgfx_compile_file(const char *path, Program *out, char *err, size_t errsz)
                     out->has_save_frame = 1;
             }
         }
-        p->code = NULL;
-        p->ncode = 0;
-        p->cap = 0;
-        p->strings = NULL;
-        p->nstrings = 0;
-        p->capstr = 0;
         rc = 0;
     } else {
         snprintf(err, errsz, "%s", p->err);
@@ -897,6 +1006,5 @@ int mgfx_compile_file(const char *path, Program *out, char *err, size_t errsz)
 
     parser_free(p);
     free(p);
-    free(src);
     return rc;
 }
